@@ -1,0 +1,16 @@
+[project]
+name = "dfsmount"
+version = "0.2.0"
+description = "Archive directories as dwarfs images; lazily mount dwarfs+fuse-overlayfs on process/access"
+requires-python = ">=3.10"
+dependencies = ["pyyaml"]
+
+[project.scripts]
+dfsmount = "dfsmount.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dfsmount*"]

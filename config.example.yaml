@@ -1,0 +1,18 @@
+# Example dfsmount config. Default lookup path: ~/.config/dfsmount.yaml
+poll_interval: 2  # seconds between /proc scans; fanotify events are handled immediately
+
+# Only needed for `dfsmount service` (which must run as root, for fanotify).
+# Mounts, unmounts, and archive creation all run as this user - never root.
+# Not needed for convert/mount/unmount/status/repack: those already run as
+# whatever user invokes them.
+run_as: alice
+
+processes:
+  - name: mygame          # matched against /proc/<pid>/comm (15-char truncated)
+    archives_dir: Games/mygame/archives    # "<target>-rev<N>.dfs" files live here
+    working_dir: ~/.local/state/dfsmount/mygame  # per-target ro/upper/work dirs
+    target_mount_dir: Games/mygame/live    # each target appears at <this>/<target>
+
+# Paths above may be absolute, start with "~" (expanded to run_as's home, or
+# the invoking user's home for direct CLI commands), or be bare-relative
+# (resolved against that same home, e.g. "Games/mygame/live" -> "~/Games/mygame/live").
