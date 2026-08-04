@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 import yaml
@@ -17,7 +18,12 @@ import yaml
 from .privsep import UserCreds, lookup_user
 
 
+@cache
 def require_executable(name: str) -> None:
+    """Raise if `name` isn't on PATH. Cached: PATH is stable for a run, and this
+    is called on every mount/unmount/archive-create - shutil.which() re-scans PATH
+    each time otherwise. Failures aren't cached (lru_cache only caches successful
+    returns), so a missing executable is re-checked, not permanently poisoned."""
     if shutil.which(name) is None:
         raise FileNotFoundError(f"required executable not found on PATH: {name}")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from functools import cache
 from pathlib import Path
 
 from .config import ProcessHooks, require_executable
@@ -16,7 +17,11 @@ MKDWARFS_EXCLUDE_FILTERS: list[str] = []
 _REV_RE = re.compile(r"^(?P<target>.+)-rev(?P<rev>\d+)\.dfs$")
 
 
+@cache
 def parse_revision(filename: str) -> tuple[str, int] | None:
+    """Cached: called once per archive filename on every process-scan/reconcile
+    poll (via discover_targets/revisions_for_target), and filenames are immutable
+    once written."""
     match = _REV_RE.match(filename)
     if match is None:
         return None
