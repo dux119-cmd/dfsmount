@@ -41,6 +41,7 @@ def target_paths(proc: ProcessConfig, target: str) -> TargetPaths:
         ro_mount=proc.working_dir / target / "ro",
         upper=proc.working_dir / target / "upper",
         work=proc.working_dir / target / "work",
+        hooks=proc.hooks,
     )
 
 

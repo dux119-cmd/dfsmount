@@ -6,7 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from .config import require_executable
+from .config import ProcessHooks, require_executable
+from .hooks import run_hook
 from .privsep import UserCreds, as_user
 
 # Edit to taste - passed as --filter=<pattern> to mkdwarfs.
@@ -62,11 +63,14 @@ def create_archive(
     archives_dir: Path,
     target: str,
     run_as: UserCreds | None = None,
+    hooks: ProcessHooks | None = None,
 ) -> Path:
     """Run mkdwarfs against source_dir, writing the next revision for `target`."""
     require_executable("mkdwarfs")
     if not source_dir.is_dir():
         raise NotADirectoryError(f"{source_dir} is not a directory")
+
+    run_hook(hooks.pre_archive if hooks else None, source_dir, run_as=run_as)
 
     with as_user(run_as):
         archives_dir.mkdir(parents=True, exist_ok=True)
@@ -85,4 +89,6 @@ def create_archive(
             f"--output={output}",
         ]
         subprocess.run(command, check=True)
+
+    run_hook(hooks.post_archive if hooks else None, source_dir, output, run_as=run_as)
     return output

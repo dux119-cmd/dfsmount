@@ -35,7 +35,9 @@ def cmd_convert(args: argparse.Namespace) -> None:
     proc = find_process(config, args.process)
     source = resolve_user_path(args.source, Path.home())
     target = archive.target_from_source(source)
-    output = archive.create_archive(source, proc.archives_dir, target)
+    output = archive.create_archive(
+        source, proc.archives_dir, target, hooks=proc.hooks
+    )
     print(f"created {output} (target: {target})")
 
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .archive import latest_archive
-from .config import require_executable
+from .config import ProcessHooks, require_executable
+from .hooks import run_hook
 from .privsep import UserCreds, as_user
 
 
@@ -21,6 +22,7 @@ class TargetPaths:
     ro_mount: Path  # dwarfs read-only FUSE mount (overlay lowerdir)
     upper: Path  # overlay upperdir
     work: Path  # overlay workdir
+    hooks: ProcessHooks = field(default_factory=ProcessHooks)
 
 
 def is_mounted(path: Path) -> bool:
@@ -45,6 +47,8 @@ def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
         raise FileNotFoundError(
             f"no archive found for target {paths.target!r} in {paths.archives_dir}"
         )
+
+    run_hook(paths.hooks.pre_mount, paths.mount_dir, run_as=run_as)
 
     with as_user(run_as):
         for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
@@ -78,15 +82,24 @@ def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
             check=True,
         )
 
+    run_hook(paths.hooks.post_mount, paths.mount_dir, run_as=run_as)
+
 
 def unmount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
     require_executable("umount")
+
+    if not is_mounted(paths.mount_dir) and not is_mounted(paths.ro_mount):
+        return
+
+    run_hook(paths.hooks.pre_unmount, paths.mount_dir, run_as=run_as)
 
     with as_user(run_as):
         if is_mounted(paths.mount_dir):
             subprocess.run(["umount", str(paths.mount_dir)], check=True)
         if is_mounted(paths.ro_mount):
             subprocess.run(["umount", str(paths.ro_mount)], check=True)
+
+    run_hook(paths.hooks.post_unmount, paths.mount_dir, run_as=run_as)
 
 
 def reset_overlay(paths: TargetPaths, run_as: UserCreds | None = None) -> None:

@@ -58,11 +58,39 @@ def resolve_user_path(raw: str, home: Path) -> Path:
 
 
 @dataclass(frozen=True)
+class ProcessHooks:
+    """Optional shell commands run around a process's archive/mount lifecycle.
+
+    Each is a shell command string (parsed with shlex); the relevant path(s)
+    are appended as extra arguments when the hook runs.
+    """
+
+    pre_archive: str | None = None  # given: source_dir
+    post_archive: str | None = None  # given: source_dir, archive_path
+    pre_mount: str | None = None  # given: mount_dir
+    post_mount: str | None = None  # given: mount_dir
+    pre_unmount: str | None = None  # given: mount_dir
+    post_unmount: str | None = None  # given: mount_dir
+
+
+def _parse_hooks(raw: dict) -> ProcessHooks:
+    return ProcessHooks(
+        pre_archive=raw.get("pre_archive"),
+        post_archive=raw.get("post_archive"),
+        pre_mount=raw.get("pre_mount"),
+        post_mount=raw.get("post_mount"),
+        pre_unmount=raw.get("pre_unmount"),
+        post_unmount=raw.get("post_unmount"),
+    )
+
+
+@dataclass(frozen=True)
 class ProcessConfig:
     name: str  # process name to watch for, matched against /proc/<pid>/comm
     archives_dir: Path  # holds "<target>-rev<N>.dfs" files, one or more targets
     working_dir: Path  # per-target ro/upper/work dirs live under here
     target_mount_dir: Path  # each target is mounted at target_mount_dir/<target>
+    hooks: ProcessHooks = ProcessHooks()
 
 
 @dataclass(frozen=True)
@@ -85,6 +113,7 @@ def load_config(path: Path | None = None) -> ServiceConfig:
             archives_dir=resolve_user_path(entry["archives_dir"], home),
             working_dir=resolve_user_path(entry["working_dir"], home),
             target_mount_dir=resolve_user_path(entry["target_mount_dir"], home),
+            hooks=_parse_hooks(entry.get("hooks") or {}),
         )
         for entry in raw.get("processes", [])
     )
