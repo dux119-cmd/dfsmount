@@ -46,7 +46,8 @@ class Fanotify:
         if fd < 0:
             errno = ctypes.get_errno()
             raise FanotifyError(
-                errno, f"fanotify_init failed: {os.strerror(errno)} (are you root?)"
+                errno,
+                f"fanotify_init failed: {os.strerror(errno)} (are you root?)",
             )
         self.fd = fd
 

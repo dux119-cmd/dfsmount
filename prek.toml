@@ -1,0 +1,22 @@
+# "prek install -f" to hook into git commit
+[[repos]]
+repo = "builtin"
+hooks = [
+ { id = "check-added-large-files" },
+ { id = "check-toml" },
+ { id = "check-yaml" },
+ { id = "check-shebang-scripts-are-executable" },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.16.1"
+hooks = [
+  { id = "ruff-format",
+    types_or = ["python", "pyi", "pyproject"],
+  },
+  { id = "ruff-check",
+    args = ["--fix", "--unsafe-fixes", "--cache-dir", "/dev/shm/.ruff-cache"],
+    types_or = ["python"],
+  },
+]

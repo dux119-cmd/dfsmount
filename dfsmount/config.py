@@ -25,7 +25,9 @@ def require_executable(name: str) -> None:
     each time otherwise. Failures aren't cached (lru_cache only caches successful
     returns), so a missing executable is re-checked, not permanently poisoned."""
     if shutil.which(name) is None:
-        raise FileNotFoundError(f"required executable not found on PATH: {name}")
+        raise FileNotFoundError(
+            f"required executable not found on PATH: {name}"
+        )
 
 
 def _invoking_home() -> Path:
@@ -93,9 +95,13 @@ def _parse_hooks(raw: dict) -> ProcessHooks:
 @dataclass(frozen=True)
 class ProcessConfig:
     name: str  # process name to watch for, matched against /proc/<pid>/comm
-    archives_dir: Path  # holds "<target>-rev<N>.dfs" files, one or more targets
+    archives_dir: (
+        Path  # holds "<target>-rev<N>.dfs" files, one or more targets
+    )
     working_dir: Path  # per-target ro/upper/work dirs live under here
-    target_mount_dir: Path  # each target is mounted at target_mount_dir/<target>
+    target_mount_dir: (
+        Path  # each target is mounted at target_mount_dir/<target>
+    )
     hooks: ProcessHooks = ProcessHooks()
 
 
@@ -103,7 +109,9 @@ class ProcessConfig:
 class ServiceConfig:
     poll_interval: float
     processes: tuple[ProcessConfig, ...]
-    run_as: str | None  # username that owns mounts/archives; required for `service`
+    run_as: (
+        str | None
+    )  # username that owns mounts/archives; required for `service`
 
 
 def load_config(path: Path | None = None) -> ServiceConfig:
@@ -118,7 +126,9 @@ def load_config(path: Path | None = None) -> ServiceConfig:
             name=entry["name"],
             archives_dir=resolve_user_path(entry["archives_dir"], home),
             working_dir=resolve_user_path(entry["working_dir"], home),
-            target_mount_dir=resolve_user_path(entry["target_mount_dir"], home),
+            target_mount_dir=resolve_user_path(
+                entry["target_mount_dir"], home
+            ),
             hooks=_parse_hooks(entry.get("hooks") or {}),
         )
         for entry in raw.get("processes", [])

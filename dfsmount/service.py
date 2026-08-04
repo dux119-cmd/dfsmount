@@ -63,23 +63,31 @@ def _bulk_reap_at_startup(config: ServiceConfig, run_as: UserCreds) -> None:
             if not is_mounted(paths.mount_dir):
                 continue
             if is_mount_busy(paths.mount_dir):
-                print(f"[dfsmount] startup scan: {paths.mount_dir} busy; leaving mounted")
+                print(
+                    f"[dfsmount] startup scan: {paths.mount_dir} busy; leaving mounted"
+                )
                 continue
             unmount(paths, run_as)
-            print(f"[dfsmount] startup scan: reaped idle mount {paths.mount_dir}")
+            print(
+                f"[dfsmount] startup scan: reaped idle mount {paths.mount_dir}"
+            )
 
 
 def run(config: ServiceConfig, run_as: UserCreds) -> None:
     require_executable("fuser")
     _bulk_reap_at_startup(config, run_as)
 
-    watches: dict[str, _Watch] = {}  # mount_dir -> armed, not-yet-mounted watch
+    watches: dict[
+        str, _Watch
+    ] = {}  # mount_dir -> armed, not-yet-mounted watch
     mounted: dict[str, TargetPaths] = {}  # mount_dir -> mounted target
     last_poll = 0.0
 
     while True:
         fd_to_key = {watch.fan.fd: key for key, watch in watches.items()}
-        timeout = max(0.0, config.poll_interval - (time.monotonic() - last_poll))
+        timeout = max(
+            0.0, config.poll_interval - (time.monotonic() - last_poll)
+        )
         ready, _, _ = select.select(list(fd_to_key), [], [], timeout)
 
         for fd in ready:
@@ -104,8 +112,14 @@ def _handle_events(
             )
             try:
                 mount(watch.paths, run_as)
-            except (OSError, subprocess.CalledProcessError, FileNotFoundError) as exc:
-                print(f"[dfsmount] mount failed for {watch.paths.mount_dir}: {exc}")
+            except (
+                OSError,
+                subprocess.CalledProcessError,
+                FileNotFoundError,
+            ) as exc:
+                print(
+                    f"[dfsmount] mount failed for {watch.paths.mount_dir}: {exc}"
+                )
                 watch.fan.respond(ev_fd, allow=False)
             else:
                 watch.fan.respond(ev_fd, allow=True)
@@ -168,7 +182,9 @@ def _disarm_if_needed(
         return
     watches[key].fan.close()
     del watches[key]
-    print(f"[dfsmount] {process_name} stopped; disarming watch on {paths.mount_dir}")
+    print(
+        f"[dfsmount] {process_name} stopped; disarming watch on {paths.mount_dir}"
+    )
 
 
 def _reap_if_idle(

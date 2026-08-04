@@ -68,7 +68,9 @@ def cmd_repack(args: argparse.Namespace) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     _config, paths = _target_paths(args)
-    state = "mounted" if mount_mod.is_mounted(paths.mount_dir) else "not mounted"
+    state = (
+        "mounted" if mount_mod.is_mounted(paths.mount_dir) else "not mounted"
+    )
     latest = archive.latest_archive(paths.archives_dir, paths.target)
     print(f"{paths.mount_dir}: {state}")
     print(f"  latest archive: {latest}")
@@ -76,28 +78,40 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "-c", "--config", default=str(default_config_path()), help="path to config.yaml"
+        "-c",
+        "--config",
+        default=str(default_config_path()),
+        help="path to config.yaml",
     )
 
 
 def _add_process_target_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("process", help="process name as configured in config.yaml")
-    parser.add_argument("target", help="target name (archive basename, e.g. 'assets')")
+    parser.add_argument(
+        "process", help="process name as configured in config.yaml"
+    )
+    parser.add_argument(
+        "target", help="target name (archive basename, e.g. 'assets')"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dfsmount")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("convert", help="pack a directory into a new archive revision")
+    p = sub.add_parser(
+        "convert", help="pack a directory into a new archive revision"
+    )
     _add_config_arg(p)
     p.add_argument("process", help="process name as configured in config.yaml")
     p.add_argument(
-        "source", help="directory to archive; target name is its final path component"
+        "source",
+        help="directory to archive; target name is its final path component",
     )
     p.set_defaults(func=cmd_convert)
 
-    p = sub.add_parser("service", help="run the watch/mount/reap loop from config.yaml")
+    p = sub.add_parser(
+        "service", help="run the watch/mount/reap loop from config.yaml"
+    )
     _add_config_arg(p)
     p.add_argument(
         "-u",
@@ -107,7 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_service)
 
-    p = sub.add_parser("mount", help="mount a target's latest archive immediately")
+    p = sub.add_parser(
+        "mount", help="mount a target's latest archive immediately"
+    )
     _add_config_arg(p)
     _add_process_target_args(p)
     p.set_defaults(func=cmd_mount)

@@ -16,7 +16,9 @@ from pathlib import Path
 from .privsep import UserCreds, as_user
 
 
-def run_hook(command: str | None, *args: Path, run_as: UserCreds | None = None) -> None:
+def run_hook(
+    command: str | None, *args: Path, run_as: UserCreds | None = None
+) -> None:
     if not command:
         return
 

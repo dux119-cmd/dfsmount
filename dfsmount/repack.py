@@ -20,10 +20,16 @@ from .privsep import UserCreds
 
 def repack(paths: TargetPaths, run_as: UserCreds | None = None) -> Path:
     if not is_mounted(paths.mount_dir):
-        raise RuntimeError(f"{paths.mount_dir} is not mounted; nothing to repack")
+        raise RuntimeError(
+            f"{paths.mount_dir} is not mounted; nothing to repack"
+        )
 
     output = create_archive(
-        paths.mount_dir, paths.archives_dir, paths.target, run_as, hooks=paths.hooks
+        paths.mount_dir,
+        paths.archives_dir,
+        paths.target,
+        run_as,
+        hooks=paths.hooks,
     )
 
     unmount(paths, run_as)

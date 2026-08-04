@@ -22,7 +22,9 @@ def _matches_cmdline(pid_dir: Path, name: str) -> bool:
     except OSError:
         return False
     args = raw.split(b"\0")
-    return any(Path(arg.decode(errors="replace")).name == name for arg in args if arg)
+    return any(
+        Path(arg.decode(errors="replace")).name == name for arg in args if arg
+    )
 
 
 def is_process_running(name: str) -> bool:

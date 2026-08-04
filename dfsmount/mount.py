@@ -1,4 +1,4 @@
-"""Mount dwarfs (read-only) with fuse-overlayfs (writable) on top, at the target path."""
+"""Mount dwarfs with fuse-overlayfs (writable) at the target path."""
 
 from __future__ import annotations
 
@@ -51,7 +51,12 @@ def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
     run_hook(paths.hooks.pre_mount, paths.mount_dir, run_as=run_as)
 
     with as_user(run_as):
-        for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
+        for directory in (
+            paths.ro_mount,
+            paths.upper,
+            paths.work,
+            paths.mount_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
         if not is_mounted(paths.ro_mount):

@@ -28,7 +28,9 @@ def parse_revision(filename: str) -> tuple[str, int] | None:
     return match.group("target"), int(match.group("rev"))
 
 
-def revisions_for_target(archives_dir: Path, target: str) -> list[tuple[int, Path]]:
+def revisions_for_target(
+    archives_dir: Path, target: str
+) -> list[tuple[int, Path]]:
     """(revision, path) pairs for a target, ascending by revision."""
     if not archives_dir.is_dir():
         return []
@@ -95,5 +97,10 @@ def create_archive(
         ]
         subprocess.run(command, check=True)
 
-    run_hook(hooks.post_archive if hooks else None, source_dir, output, run_as=run_as)
+    run_hook(
+        hooks.post_archive if hooks else None,
+        source_dir,
+        output,
+        run_as=run_as,
+    )
     return output

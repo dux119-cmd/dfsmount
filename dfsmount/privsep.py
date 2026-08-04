@@ -32,7 +32,9 @@ def lookup_user(name: str) -> UserCreds:
         raise SystemExit(f"no such user: {name!r}") from None
     groups = tuple(g.gr_gid for g in grp.getgrall() if name in g.gr_mem)
     groups = tuple({pw.pw_gid, *groups})
-    return UserCreds(name=name, uid=pw.pw_uid, gid=pw.pw_gid, groups=groups, home=pw.pw_dir)
+    return UserCreds(
+        name=name, uid=pw.pw_uid, gid=pw.pw_gid, groups=groups, home=pw.pw_dir
+    )
 
 
 @contextmanager
