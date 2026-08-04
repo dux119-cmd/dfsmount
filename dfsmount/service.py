@@ -51,8 +51,28 @@ class _Watch:
     paths: TargetPaths
 
 
+def _bulk_reap_at_startup(config: ServiceConfig, run_as: UserCreds) -> None:
+    """Once, on service startup: scan every configured process's archives_dir
+    for targets, and unmount any that are already mounted (e.g. left over from
+    a prior service run) and idle. Mounts still in use are left alone; the
+    normal reconcile loop will reap them once they go idle.
+    """
+    for proc in config.processes:
+        for target in discover_targets(proc.archives_dir):
+            paths = target_paths(proc, target)
+            if not is_mounted(paths.mount_dir):
+                continue
+            if is_mount_busy(paths.mount_dir):
+                print(f"[dfsmount] startup scan: {paths.mount_dir} busy; leaving mounted")
+                continue
+            unmount(paths, run_as)
+            print(f"[dfsmount] startup scan: reaped idle mount {paths.mount_dir}")
+
+
 def run(config: ServiceConfig, run_as: UserCreds) -> None:
     require_executable("fuser")
+    _bulk_reap_at_startup(config, run_as)
+
     watches: dict[str, _Watch] = {}  # mount_dir -> armed, not-yet-mounted watch
     mounted: dict[str, TargetPaths] = {}  # mount_dir -> mounted target
     last_poll = 0.0
