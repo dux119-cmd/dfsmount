@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .archive import latest_archive
-from .config import ProcessHooks, require_executable
+from .binaries import dwarfs_executable
+from .config import LauncherHooks, require_executable
 from .hooks import run_hook
 from .privsep import UserCreds, as_user
 
@@ -22,7 +23,7 @@ class TargetPaths:
     ro_mount: Path  # dwarfs read-only FUSE mount (overlay lowerdir)
     upper: Path  # overlay upperdir
     work: Path  # overlay workdir
-    hooks: ProcessHooks = field(default_factory=ProcessHooks)
+    hooks: LauncherHooks = field(default_factory=LauncherHooks)
 
 
 def is_mounted(path: Path) -> bool:
@@ -36,7 +37,7 @@ def is_mounted(path: Path) -> bool:
 
 
 def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
-    require_executable("dwarfs")
+    dwarfs = dwarfs_executable("dwarfs")
     require_executable("fuse-overlayfs")
 
     if is_mounted(paths.mount_dir):
@@ -62,7 +63,7 @@ def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
         if not is_mounted(paths.ro_mount):
             subprocess.run(
                 [
-                    "dwarfs",
+                    dwarfs,
                     "-o",
                     f"workers={os.cpu_count() or 1}",
                     "-o",

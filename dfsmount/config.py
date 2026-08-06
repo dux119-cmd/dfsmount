@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import cache
 from pathlib import Path
 
@@ -25,9 +25,7 @@ def require_executable(name: str) -> None:
     each time otherwise. Failures aren't cached (lru_cache only caches successful
     returns), so a missing executable is re-checked, not permanently poisoned."""
     if shutil.which(name) is None:
-        raise FileNotFoundError(
-            f"required executable not found on PATH: {name}"
-        )
+        raise FileNotFoundError(f"required executable not found on PATH: {name}")
 
 
 def _invoking_home() -> Path:
@@ -65,53 +63,48 @@ def resolve_user_path(raw: str, home: Path) -> Path:
     return path
 
 
-@dataclass(frozen=True)
-class ProcessHooks:
-    """Optional shell commands run around a process's archive/mount lifecycle.
+HookCommands = str | list[str] | None  # one command, or several run in sequence
 
-    Each is a shell command string (parsed with shlex); the relevant path(s)
-    are appended as extra arguments when the hook runs.
+
+@dataclass(frozen=True)
+class LauncherHooks:
+    """Optional shell commands run around a launcher's archive/mount lifecycle.
+
+    Each is a shell command string (parsed with shlex), or a list of them to
+    run in sequence. The relevant path(s) are appended as extra arguments
+    when a hook runs. A path may start with "builtin:" to reference a hook
+    script bundled with dfsmount, e.g. "builtin:hooks/lutris/prepack.sh".
     """
 
-    pre_archive: str | None = None  # given: source_dir
-    post_archive: str | None = None  # given: source_dir, archive_path
-    pre_mount: str | None = None  # given: mount_dir
-    post_mount: str | None = None  # given: mount_dir
-    pre_unmount: str | None = None  # given: mount_dir
-    post_unmount: str | None = None  # given: mount_dir
+    pre_archive: HookCommands = None  # given: source_dir
+    post_archive: HookCommands = None  # given: source_dir, archive_path
+    pre_mount: HookCommands = None  # given: mount_dir
+    post_mount: HookCommands = None  # given: mount_dir
+    pre_unmount: HookCommands = None  # given: mount_dir
+    post_unmount: HookCommands = None  # given: mount_dir
+    install: HookCommands = None  # given: mount_dir
+    uninstall: HookCommands = None  # given: mount_dir
 
 
-def _parse_hooks(raw: dict) -> ProcessHooks:
-    return ProcessHooks(
-        pre_archive=raw.get("pre_archive"),
-        post_archive=raw.get("post_archive"),
-        pre_mount=raw.get("pre_mount"),
-        post_mount=raw.get("post_mount"),
-        pre_unmount=raw.get("pre_unmount"),
-        post_unmount=raw.get("post_unmount"),
-    )
+def _parse_hooks(raw: dict) -> LauncherHooks:
+    names = (f.name for f in fields(LauncherHooks))
+    return LauncherHooks(**{name: raw.get(name) for name in names})
 
 
 @dataclass(frozen=True)
-class ProcessConfig:
-    name: str  # process name to watch for, matched against /proc/<pid>/comm
-    archives_dir: (
-        Path  # holds "<target>-rev<N>.dfs" files, one or more targets
-    )
+class LauncherConfig:
+    name: str  # launcher process name to watch for, matched against /proc/<pid>/comm
+    archives_dir: Path  # holds "<target>-rev<N>.dfs" files, one or more targets
     working_dir: Path  # per-target ro/upper/work dirs live under here
-    target_mount_dir: (
-        Path  # each target is mounted at target_mount_dir/<target>
-    )
-    hooks: ProcessHooks = ProcessHooks()
+    target_mount_dir: Path  # each target is mounted at target_mount_dir/<target>
+    hooks: LauncherHooks = LauncherHooks()
 
 
 @dataclass(frozen=True)
 class ServiceConfig:
     poll_interval: float
-    processes: tuple[ProcessConfig, ...]
-    run_as: (
-        str | None
-    )  # username that owns mounts/archives; required for `service`
+    launchers: tuple[LauncherConfig, ...]
+    run_as: str | None  # username that owns mounts/archives; required for `service`
 
 
 def load_config(path: Path | None = None) -> ServiceConfig:
@@ -121,30 +114,28 @@ def load_config(path: Path | None = None) -> ServiceConfig:
     run_as = raw.get("run_as")
     home = Path(lookup_user(run_as).home) if run_as else _invoking_home()
 
-    processes = tuple(
-        ProcessConfig(
+    launchers = tuple(
+        LauncherConfig(
             name=entry["name"],
             archives_dir=resolve_user_path(entry["archives_dir"], home),
             working_dir=resolve_user_path(entry["working_dir"], home),
-            target_mount_dir=resolve_user_path(
-                entry["target_mount_dir"], home
-            ),
+            target_mount_dir=resolve_user_path(entry["target_mount_dir"], home),
             hooks=_parse_hooks(entry.get("hooks") or {}),
         )
-        for entry in raw.get("processes", [])
+        for entry in raw.get("launchers", [])
     )
     return ServiceConfig(
         poll_interval=float(raw.get("poll_interval", 2)),
-        processes=processes,
+        launchers=launchers,
         run_as=run_as,
     )
 
 
-def find_process(config: ServiceConfig, name: str) -> ProcessConfig:
-    for proc in config.processes:
-        if proc.name == name:
-            return proc
-    raise SystemExit(f"no process named {name!r} in config")
+def find_launcher(config: ServiceConfig, name: str) -> LauncherConfig:
+    for launcher in config.launchers:
+        if launcher.name == name:
+            return launcher
+    raise SystemExit(f"no launcher named {name!r} in config")
 
 
 def resolve_run_as(config: ServiceConfig, override: str | None) -> UserCreds:

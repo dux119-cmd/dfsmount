@@ -7,14 +7,14 @@ disappear again when it's done.
 
 ## How it works
 
-Each game you convert is stored as an immutable, compressed archive with
-a revision tag that's incremented on subsequent re-packs:
+Each game you create an archive for is stored as an immutable, compressed
+archive with a revision tag that's incremented on subsequent re-packs:
 
 ```
 mygame-<rev1>.dfs
 ```
 
-A background service watches for the launcher processes you configure. When
+A background service watches for the launchers you configure. When
 one is running, dfsmount arms a lightweight [fanotify](https://man7.org/linux/man-pages/man7/fanotify.7.html)
 The moment the launcher (or anything else) opens a file inside one of those
 directories, dfsmount transparently mounts it on the spot and lets the
@@ -49,18 +49,39 @@ the space back).
 Requires:
 
 - Python ≥ 3.10 and `pyyaml`
-- [`mkdwarfs` and `dwarfs`](https://github.com/mhx/dwarfs) on `PATH`
+- [`mkdwarfs`, `dwarfs`, `dwarfsck`, `dwarfsextract`](https://github.com/mhx/dwarfs) —
+  either on `PATH`, or fetched by dfsmount itself (see below)
 - `fuse-overlayfs` on `PATH`
 - `mountpoint` / `umount` (util-linux, near-universally present)
 - Linux with fanotify support and `fuser` (from `psmisc`, nearly always
   already installed) — only the `service` command needs root, for fanotify;
-  everything else (mounting, unmounting, converting) runs as your own user
+  everything else (mounting, unmounting, creating archives) runs as your own
+  user
 
 ```
 pip install .
 ```
 
 This installs the `dfsmount` command.
+
+### dwarfs binaries
+
+Instead of installing `mkdwarfs`/`dwarfs`/`dwarfsck`/`dwarfsextract` through
+your distro's package manager, dfsmount can fetch the matching prebuilt
+binaries straight from
+[github.com/mhx/dwarfs/releases](https://github.com/mhx/dwarfs/releases):
+
+```
+dfsmount fetch-binaries
+```
+
+This downloads the latest release's Linux tarball for your architecture
+(x86_64 or aarch64) and unpacks `mkdwarfs`, `dwarfs`, `dwarfsck`, and
+`dwarfsextract` into `dfsmount/bin/<version>/`, with a `current` symlink
+pointing at the active version. Once fetched, every dfsmount command prefers
+these bundled binaries over `PATH`; run `dfsmount fetch-binaries --force` to
+re-fetch (e.g. after a new dwarfs release). If nothing has been fetched,
+dfsmount falls back to `mkdwarfs`/`dwarfs` on `PATH` as before.
 
 ## Configuring
 
@@ -74,7 +95,7 @@ poll_interval: 2  # seconds between /proc scans
 # Only needed for `dfsmount service` — see "Running the service" below.
 run_as: alice
 
-processes:
+launchers:
   - name: launcherexec  # matched against /proc/<pid>/comm (15-char truncated)
     archives_dir: /backups/game-archives # "<target>-rev<N>.dfs" files live here
     working_dir: .local/state/games/ # per-game writable dirs created here
@@ -87,14 +108,27 @@ processes:
       post_mount: .local/bin/after-mount.sh       # arg: mount_dir
       pre_unmount: .local/bin/before-unmount.sh   # arg: mount_dir
       post_unmount: .local/bin/after-unmount.sh   # arg: mount_dir
+      install: .local/bin/install-into-lutris.sh    # arg: mount_dir; run by `dfsmount install`
+      uninstall: .local/bin/remove-from-lutris.sh   # arg: mount_dir; run by `dfsmount uninstall`
 
 ```
 
 Configuration paths can be absolute, start with `~` (expanded to your
 home directory or `run_as`'s home, for the `service` command), or be given
 bare-relative (resolved the same way, so `Games/lutris/live` means
-`~/Games/lutris/live`). Hook paths can additionally use builtin looks
-by prefixing the path with `builtin:`, such as: `builtin:hooks/lutris-install.sh`
+`~/Games/lutris/live`). Hook paths can additionally reference a script
+bundled with dfsmount itself by prefixing the path with `builtin:`, resolved
+relative to the package, such as: `builtin:hooks/lutris/prepack.sh`
+
+Any hook can also be given as a list of commands instead of a single one, to
+run several scripts in sequence for that event:
+
+```yaml
+    hooks:
+      pre_archive:
+        - builtin:hooks/lutris/prepack.sh
+        - .local/bin/before-pack.sh
+```
 
 Add one block per launcher (Steam, Lutris, Heroic, etc.) — each gets its own
 archives directory, working directory, mount area, and potential hooks.
@@ -117,23 +151,44 @@ and fragile.
 
 ## Usage
 
-Only `service` needs root (for fanotify). `convert`, `mount`, `unmount`,
-`repack`, and `status` all run as whichever user invokes them — that's the
-whole point of `fuse-overlayfs`/`dwarfs`, neither needs privilege.
+Only `service` needs root (for fanotify). `create`, `mount`, `unmount`,
+`repack`, `status`, `install`, and `uninstall` all run as whichever user
+invokes them — that's the whole point of `fuse-overlayfs`/`dwarfs`, neither
+needs privilege.
 
-### Convert a game to an archive
+### Create an archive from a game
 
 ```
-dfsmount convert lutris /path/to/existing/mygame-directory
+dfsmount create lutris /path/to/existing/mygame-directory
 ```
 
 Packs the given directory into `mygame-rev1.dfs` inside the `lutris`
-process's `archives_dir`. The **target** name is taken from the directory
+launcher's `archives_dir`. The **target** name is taken from the directory
 you point at — `.../mygame-directory` → target `mygame-directory` — and
 that's what you use in every other command below.
 
 Once packed, you can safely delete (or move elsewhere) the original,
 uncompressed directory.
+
+### List a launcher's games
+
+Leave off the source directory to list game names instead of creating an
+archive:
+
+```
+dfsmount create lutris
+```
+
+```
+mygame
+otherclassic (repackable)
+```
+
+Names come from the directories under the launcher's `target_mount_dir`
+(and any target that only exists as an archive so far). `(repackable)` marks
+games that already have an archive *and* unsaved changes in their overlay —
+i.e. `dfsmount repack` has something new to bake in. A game with no archive
+yet, or with an empty/missing overlay, isn't repackable.
 
 ### Run the service
 
@@ -182,6 +237,22 @@ the service mount it). Packs the current live state into the next
 revision, clears the overlay, and remounts — see [Upgrading a
 game](#upgrading-a-game) above.
 
+### Install / uninstall a game
+
+```
+dfsmount install lutris mygame
+dfsmount install lutris all
+dfsmount uninstall lutris mygame
+dfsmount uninstall lutris all
+```
+
+Runs the launcher's `install` (or `uninstall`) hook, passing it the game's
+mount dir. `all` runs it for every game name known to the launcher (same set
+`dfsmount create <launcher>` lists), instead of a single target. These
+commands don't mount or unmount anything themselves — they're for hooks that
+register (or remove) a game with the launcher's own library, independent of
+whether it's currently mounted.
+
 ## Example systemd unit
 
 The service itself must run as root (fanotify), but set `run_as` in the
@@ -209,7 +280,7 @@ with `run_as: alice` set in that config file (or add `-u alice` to
 
 - Archives are compressed with `zstd` at a fairly aggressive level
   (`compress-level=9`, long-range matching) — expect `mkdwarfs` to take a
-  while on large game libraries. This happens once, at `convert`/`repack`
+  while on large game libraries. This happens once, at `create`/`repack`
   time, not on every mount.
 - Mounting is lazy per-*game*, not per-launcher — a launcher with 50 games
   configured only triggers mounts for the ones it actually opens.

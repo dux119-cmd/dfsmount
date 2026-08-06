@@ -7,7 +7,8 @@ import subprocess
 from functools import cache
 from pathlib import Path
 
-from .config import ProcessHooks, require_executable
+from .binaries import dwarfs_executable
+from .config import LauncherHooks
 from .hooks import run_hook
 from .privsep import UserCreds, as_user
 
@@ -19,7 +20,7 @@ _REV_RE = re.compile(r"^(?P<target>.+)-rev(?P<rev>\d+)\.dfs$")
 
 @cache
 def parse_revision(filename: str) -> tuple[str, int] | None:
-    """Cached: called once per archive filename on every process-scan/reconcile
+    """Cached: called once per archive filename on every launcher-scan/reconcile
     poll (via discover_targets/revisions_for_target), and filenames are immutable
     once written."""
     match = _REV_RE.match(filename)
@@ -28,9 +29,7 @@ def parse_revision(filename: str) -> tuple[str, int] | None:
     return match.group("target"), int(match.group("rev"))
 
 
-def revisions_for_target(
-    archives_dir: Path, target: str
-) -> list[tuple[int, Path]]:
+def revisions_for_target(archives_dir: Path, target: str) -> list[tuple[int, Path]]:
     """(revision, path) pairs for a target, ascending by revision."""
     if not archives_dir.is_dir():
         return []
@@ -70,10 +69,10 @@ def create_archive(
     archives_dir: Path,
     target: str,
     run_as: UserCreds | None = None,
-    hooks: ProcessHooks | None = None,
+    hooks: LauncherHooks | None = None,
 ) -> Path:
     """Run mkdwarfs against source_dir, writing the next revision for `target`."""
-    require_executable("mkdwarfs")
+    mkdwarfs = dwarfs_executable("mkdwarfs")
     if not source_dir.is_dir():
         raise NotADirectoryError(f"{source_dir} is not a directory")
 
@@ -83,7 +82,7 @@ def create_archive(
         archives_dir.mkdir(parents=True, exist_ok=True)
         output = next_archive_path(archives_dir, target)
 
-        command = ["mkdwarfs"]
+        command = [mkdwarfs]
         for pattern in MKDWARFS_EXCLUDE_FILTERS:
             command.append(f"--filter={pattern}")
         command += [

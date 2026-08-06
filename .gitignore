@@ -1,3 +1,6 @@
+# dwarfs binaries
+/dfsmount/bin/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

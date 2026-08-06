@@ -1,7 +1,7 @@
-"""Cheap /proc-based process-name lookup.
+"""Cheap /proc-based launcher process-name lookup.
 
 Note: /proc/<pid>/comm is truncated to 15 characters (TASK_COMM_LEN - 1), same
-as `ps -C` / `pgrep -x`. Use the truncated name in config if a process name is
+as `ps -C` / `pgrep -x`. Use the truncated name in config if a launcher name is
 longer than that.
 
 Interpreted launchers (e.g. a Lutris installed as a Python entry point) show
@@ -22,12 +22,10 @@ def _matches_cmdline(pid_dir: Path, name: str) -> bool:
     except OSError:
         return False
     args = raw.split(b"\0")
-    return any(
-        Path(arg.decode(errors="replace")).name == name for arg in args if arg
-    )
+    return any(Path(arg.decode(errors="replace")).name == name for arg in args if arg)
 
 
-def is_process_running(name: str) -> bool:
+def is_launcher_running(name: str) -> bool:
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
