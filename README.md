@@ -1,27 +1,24 @@
 # dfsmount
 
-Store your game libraries as compressed, read-only [dwarfs](https://github.com/mhx/dwarfs)
-archives instead of raw directories — then have them **appear** as normal,
-writable directories the instant a launcher (Steam, Lutris, Heroic, ...)
-actually tries to use them, and disappear again when it's done.
-
-No always-on mounts. No manually mounting before you play. No wasted disk
-space from long-since-finished games sitting around uncompressed.
+Pack bloated game directories into single-file immutable [DwarFS](https://github.com/mhx/dwarfs)
+archives and have them auto-mount on access with a writable overlay when
+a launcher (Steam, Lutris, Heroic, ...) actually tries to use them, and
+disappear again when it's done.
 
 ## How it works
 
-Each game you convert is stored as an immutable, compressed archive:
+Each game you convert is stored as an immutable, compressed archive with
+a revision tag that's incremented on subsequent re-packs:
 
 ```
-mygame-rev1.dfs
+mygame-<rev1>.dfs
 ```
 
 A background service watches for the launcher processes you configure. When
 one is running, dfsmount arms a lightweight [fanotify](https://man7.org/linux/man-pages/man7/fanotify.7.html)
-watch on each of that launcher's game directories — nothing is mounted yet.
 The moment the launcher (or anything else) opens a file inside one of those
 directories, dfsmount transparently mounts it on the spot and lets the
-access through, so from the launcher's point of view the directory was just
+access through, so from the launcher's point of view the directory was
 "already there."
 
 Each mount is actually two layers stacked with `fuse-overlayfs`:
@@ -30,19 +27,9 @@ Each mount is actually two layers stacked with `fuse-overlayfs`:
 - **Upper (writable):** an empty overlay directory that catches saves,
   settings, DRM files, and anything else the game writes at runtime.
 
-The archive is never touched. Everything the game changes lives only in the
-upper layer.
-
-Reaping is based purely on use, not on the launcher: the moment nothing has
-the mounted directory open (checked every `poll_interval`), dfsmount tears
-it down — whether or not the launcher is still running. So a game that
-outlives the launcher (common — Steam/Lutris often exit while the game
-keeps going) stays mounted until *it* exits, and a mount doesn't linger
-just because the launcher happens to still be open.
-
 ### Upgrading a game
 
-Sometimes you'll want to re-pack a game — after a game update, a mod
+If you've Sometimes you'll want to re-pack a game, r a game update, a mod
 install, or just to bake accumulated save data into a smaller image. That's
 what `repack` does:
 
@@ -88,33 +75,45 @@ poll_interval: 2  # seconds between /proc scans
 run_as: alice
 
 processes:
-  - name: lutris                    # matched against /proc/<pid>/comm
-    archives_dir: Games/lutris/archives    # where <target>-revN.dfs files live
-    working_dir: ~/.local/state/dfsmount/lutris  # per-game ro/upper/work dirs
-    target_mount_dir: Games/lutris/live    # each game appears at <this>/<target>
+  - name: launcherexec  # matched against /proc/<pid>/comm (15-char truncated)
+    archives_dir: /backups/game-archives # "<target>-rev<N>.dfs" files live here
+    working_dir: .local/state/games/ # per-game writable dirs created here
+    target_mount_dir: Games    # common dir where the games originally lived
+
+    hooks:
+      pre_archive: .local/bin/before-pack.sh      # arg: source_dir
+      post_archive: .local/bin/after-pack.sh      # args: source_dir, archive_path
+      pre_mount: .local/bin/before-mount.sh       # arg: mount_dir
+      post_mount: .local/bin/after-mount.sh       # arg: mount_dir
+      pre_unmount: .local/bin/before-unmount.sh   # arg: mount_dir
+      post_unmount: .local/bin/after-unmount.sh   # arg: mount_dir
+
 ```
 
-- **`name`** is matched against `/proc/<pid>/comm`, which is truncated to 15
-  characters — the same limit `ps -C` and `pgrep -x` use. If your launcher's
-  binary name is longer, use the truncated form. For launchers that are
-  really a Python script (`comm` shows up as `python3`, e.g.
-  `python3 /usr/bin/lutris`), dfsmount falls back to matching `name` against
-  the script/module basename in the process's argv — so `name: lutris`
-  still works unmodified.
-- **`archives_dir`** holds every game's `.dfs` archives for this launcher.
-  One directory, many games.
-- **`working_dir`** holds the per-game scratch space (dwarfs mount point +
-  overlay upper/work dirs). Not something you need to look inside.
-- **`target_mount_dir`** is where the live, writable game directories show
-  up — `target_mount_dir/<target>`. Point your launcher's library path here.
-
-Any of these three paths may be absolute, start with `~` (expanded to your
-home directory — or `run_as`'s home, for the `service` command), or be given
+Configuration paths can be absolute, start with `~` (expanded to your
+home directory or `run_as`'s home, for the `service` command), or be given
 bare-relative (resolved the same way, so `Games/lutris/live` means
-`~/Games/lutris/live`).
+`~/Games/lutris/live`). Hook paths can additionally use builtin looks
+by prefixing the path with `builtin:`, such as: `builtin:hooks/lutris-install.sh`
 
 Add one block per launcher (Steam, Lutris, Heroic, etc.) — each gets its own
-archives directory, working directory, and mount area.
+archives directory, working directory, mount area, and potential hooks.
+
+### Hooks detailed discussion
+
+Hooks are particularly useful for adjusting/cleaning a game directory and
+collecting metadata prior to archiving, which can then be used by a hook
+when pre-mounting. An example usecase is genericizing a directory and 
+saving metadata such as the name, date, art, and Wine/Proton launch preferences
+into common filenames inside the game archive itself. 
+
+These can then be read during pre-mount to install (or check if it's installed)
+into the target launcher. This way, the game archive becomes stand-alone and portable,
+and is now liberated from it's unreliable/ephemeral online playstore like Steam, 
+GoG, and Epic. With metadata embedded in the archive, the game is also
+liberated from launchers (like Lutris or Heroic), which often store hardcoded paths
+and mix metadata across folders and in databases, making "portability" combersome
+and fragile.
 
 ## Usage
 

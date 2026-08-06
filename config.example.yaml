@@ -3,28 +3,23 @@ poll_interval: 2  # seconds between /proc scans; fanotify events are handled imm
 
 # Only needed for `dfsmount service` (which must run as root, for fanotify).
 # Mounts, unmounts, and archive creation all run as this user - never root.
-# Not needed for convert/mount/unmount/status/repack: those already run as
-# whatever user invokes them.
 run_as: alice
 
 processes:
-  - name: mygame          # matched against /proc/<pid>/comm (15-char truncated)
-    archives_dir: Games/mygame/archives    # "<target>-rev<N>.dfs" files live here
-    working_dir: ~/.local/state/dfsmount/mygame  # per-target ro/upper/work dirs
-    target_mount_dir: Games/mygame/live    # each target appears at <this>/<target>
+  - name: launcherexec          # matched against /proc/<pid>/comm (15-char truncated)
+    archives_dir: /backups/game-archives    # "<target>-rev<N>.dfs" files live here
+    working_dir: .local/state/launcher # per-target ro/upper/work dirs
+    target_mount_dir: Games    # each target appears at <this>/<target>
 
     # Optional, all omittable. Shell commands (parsed like a shell command
     # line); the relevant path(s) are appended as extra arguments. Run under
     # `run_as`'s credentials, never root. A failing hook is logged but does
     # not block the mount/archive operation it wraps.
+    # Paths can be absolute, start with "~", or relative to the user's home dir
     hooks:
-      pre_archive: /home/alice/.local/bin/before-pack.sh      # arg: source_dir
-      post_archive: /home/alice/.local/bin/after-pack.sh      # args: source_dir, archive_path
-      pre_mount: /home/alice/.local/bin/before-mount.sh       # arg: mount_dir
-      post_mount: /home/alice/.local/bin/after-mount.sh       # arg: mount_dir
-      pre_unmount: /home/alice/.local/bin/before-unmount.sh   # arg: mount_dir
-      post_unmount: /home/alice/.local/bin/after-unmount.sh   # arg: mount_dir
-
-# Paths above may be absolute, start with "~" (expanded to run_as's home, or
-# the invoking user's home for direct CLI commands), or be bare-relative
-# (resolved against that same home, e.g. "Games/mygame/live" -> "~/Games/mygame/live").
+      pre_archive: .local/bin/before-pack.sh      # arg: source_dir
+      post_archive: .local/bin/after-pack.sh      # args: source_dir, archive_path
+      pre_mount: .local/bin/before-mount.sh       # arg: mount_dir
+      post_mount: .local/bin/after-mount.sh       # arg: mount_dir
+      pre_unmount: .local/bin/before-unmount.sh   # arg: mount_dir
+      post_unmount: .local/bin/after-unmount.sh   # arg: mount_dir
