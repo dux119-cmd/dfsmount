@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .archive import discover_targets, latest_archive
 from .config import LauncherConfig
+from .mount import is_mounted
 
 
 @dataclass(frozen=True)
@@ -42,3 +43,14 @@ def list_games(launcher: LauncherConfig) -> list[GameStatus]:
         return has_archive and _has_overlay_content(overlay)
 
     return [GameStatus(name=n, repackable=repackable(n)) for n in names]
+
+
+def list_mounted(launcher: LauncherConfig) -> list[str]:
+    """Target names currently mounted under launcher.target_mount_dir."""
+    if not launcher.target_mount_dir.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in launcher.target_mount_dir.iterdir()
+        if entry.is_dir() and is_mounted(entry)
+    )

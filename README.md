@@ -14,14 +14,50 @@ archive with a revision tag that's incremented on subsequent re-packs:
 mygame-<rev1>.dfs
 ```
 
-A background service watches for the launchers you configure. When
-one is running, dfsmount arms a lightweight [fanotify](https://man7.org/linux/man-pages/man7/fanotify.7.html)
-The moment the launcher (or anything else) opens a file inside one of those
-directories, dfsmount transparently mounts it on the spot and lets the
-access through, so from the launcher's point of view the directory was
-"already there."
+A lightweight, unprivileged background service (`dfsmount service`) watches
+for the launchers you configure. It generates, per archived game, one real
+**systemd user automount** (the overlay) plus a plain oneshot **service**
+that mounts dwarfs as a prerequisite for it:
 
-Each mount is actually two layers stacked with `fuse-overlayfs`:
+- **dwarfs service** (read-only): a oneshot `.service` unit whose
+  `ExecStart` runs the `dwarfs` binary directly against the `.dfs` archive
+  - the same invocation used for manual mounts - and whose `ExecStop`
+  unmounts it. It's not a systemd mount/automount itself; it's just a
+  prerequisite action the overlay unit depends on (`Requires=`/`After=`),
+  and `StopWhenUnneeded=yes` means systemd runs its `ExecStop` as a
+  post-action the moment the overlay that needed it is gone - not before.
+- **overlay automount** (writable): a real systemd `.automount`, triggering
+  a `fuse-overlayfs` mount stacked on the dwarfs mount above, catching
+  saves/settings/DRM files at runtime.
+
+Only the overlay gets an actual kernel autofs mount. Stacking a second one
+underneath it (an earlier version of this tool automounted dwarfs too) ran
+into unprivileged `systemctl --user` sessions rejecting the nested autofs
+setup outright (`Operation not permitted`) - kernel autofs plumbing is
+touchy enough without nesting it, even before getting into whether a given
+distro's user session has the privilege for autofs at all. If you still see
+`Operation not permitted` on the *overlay's* automount, that's this same
+unprivileged-autofs limitation at the kernel level, independent of
+dfsmount's unit layout - check whether your systemd user session has
+`CAP_SYS_ADMIN` available for autofs.
+
+The overlay automount carries a one-minute idle timeout - once it's idle,
+systemd stops the overlay mount, which (via `StopWhenUnneeded`) tears the
+dwarfs service down right behind it, entirely on its own.
+
+The service keeps these unit files in sync with reality:
+
+- While the launcher is running, every archived game's overlay automount is
+  **armed** (`systemctl --user enable --now`) - so touching the game's
+  directory triggers the mount, same as before.
+- The moment the launcher isn't running, its overlay automount is
+  **disarmed** (stopped and disabled) - systemd stops watching that path
+  entirely until the launcher comes back.
+- A newly created archive gets its unit files generated and registered
+  with systemd on the next poll; a deleted archive has its unit files
+  removed entirely.
+
+Each mount is actually two layers:
 
 - **Lower (read-only):** the `.dfs` archive itself, mounted via `dwarfs`.
 - **Upper (writable):** an empty overlay directory that catches saves,
@@ -51,12 +87,16 @@ Requires:
 - Python ≥ 3.10 and `pyyaml`
 - [`mkdwarfs`, `dwarfs`, `dwarfsck`, `dwarfsextract`](https://github.com/mhx/dwarfs) —
   either on `PATH`, or fetched by dfsmount itself (see below)
-- `fuse-overlayfs` on `PATH`
+- `fuse-overlayfs` on `PATH`, plus the generic FUSE mount helper
+  (`mount.fuse`, from your distro's `fuse`/`fuse3` package) that systemd's
+  generated `.mount` units invoke
 - `mountpoint` / `umount` (util-linux, near-universally present)
-- Linux with fanotify support and `fuser` (from `psmisc`, nearly always
-  already installed) — only the `service` command needs root, for fanotify;
-  everything else (mounting, unmounting, creating archives) runs as your own
-  user
+- `systemd` in user mode (`systemctl --user`, `systemd-escape`) — this is
+  what actually owns mounting/unmounting for `dfsmount service`; on a
+  headless box you'll need `loginctl enable-linger $USER` so your user
+  session (and its automounts) stays up without a login shell
+- Everything (mounting, unmounting, creating archives, running the
+  service) always runs as your own user - there's no root component
 
 ```
 pip install .
@@ -92,9 +132,6 @@ watched:
 ```yaml
 poll_interval: 2  # seconds between /proc scans
 
-# Only needed for `dfsmount service` — see "Running the service" below.
-run_as: alice
-
 launchers:
   - name: launcherexec  # matched against /proc/<pid>/comm (15-char truncated)
     archives_dir: /backups/game-archives # "<target>-rev<N>.dfs" files live here
@@ -104,19 +141,22 @@ launchers:
     hooks:
       pre_archive: .local/bin/before-pack.sh      # arg: source_dir
       post_archive: .local/bin/after-pack.sh      # args: source_dir, archive_path
-      pre_mount: .local/bin/before-mount.sh       # arg: mount_dir
-      post_mount: .local/bin/after-mount.sh       # arg: mount_dir
-      pre_unmount: .local/bin/before-unmount.sh   # arg: mount_dir
-      post_unmount: .local/bin/after-unmount.sh   # arg: mount_dir
       install: .local/bin/install-into-lutris.sh    # arg: mount_dir; run by `dfsmount install`
       uninstall: .local/bin/remove-from-lutris.sh   # arg: mount_dir; run by `dfsmount uninstall`
 
 ```
 
-Configuration paths can be absolute, start with `~` (expanded to your
-home directory or `run_as`'s home, for the `service` command), or be given
-bare-relative (resolved the same way, so `Games/lutris/live` means
-`~/Games/lutris/live`). Hook paths can additionally reference a script
+There are no `pre_mount`/`post_mount`/`pre_unmount`/`post_unmount` hooks:
+mounting and unmounting are owned by systemd automount units, which don't
+have a hook point to run arbitrary commands around each mount/unmount
+cycle. Use `pre_archive`/`post_archive` for anything that needs to happen
+around packing a game, and `install`/`uninstall` for one-off registration
+with a launcher's own library.
+
+Configuration paths can be absolute, start with `~` (expanded to your home
+directory), or be given bare-relative (resolved the same way, so
+`Games/lutris/live` means `~/Games/lutris/live`). Hook paths can additionally
+reference a script
 bundled with dfsmount itself by prefixing the path with `builtin:`, resolved
 relative to the package, such as: `builtin:hooks/lutris/prepack.sh`
 
@@ -151,15 +191,42 @@ and fragile.
 
 ## Usage
 
-Only `service` needs root (for fanotify). `create`, `mount`, `unmount`,
-`repack`, `status`, `install`, and `uninstall` all run as whichever user
-invokes them — that's the whole point of `fuse-overlayfs`/`dwarfs`, neither
-needs privilege.
+Commands take the launcher first, then the action, then (optionally) a
+target: `dfsmount <launcher> <action> [target]`. If only one launcher is
+configured, leave it off entirely — `dfsmount <action> [target]` — and
+dfsmount assumes it. If several launchers are configured and you don't name
+one, dfsmount lists what's available instead of guessing:
+
+```
+$ dfsmount mount
+dfsmount: specify a launcher:
+  lutris
+  heroic
+```
+
+`service` and `fetch-binaries` never take a launcher — `service` runs for
+every configured launcher at once, and `fetch-binaries` isn't launcher-
+scoped at all.
+
+Every command, including `service`, always runs as whichever user invokes
+it — that's the whole point of `fuse-overlayfs`/`dwarfs`, neither needs
+privilege, and `service` itself only ever talks to `systemctl --user`.
+
+### Leaving off the target lists short names
+
+Every action that takes a target will list the relevant short names instead
+of acting, if you leave the target off:
+
+- `mount` lists archives available to mount (from `archives_dir`)
+- `unmount` and `repack` list targets currently mounted
+- `status` lists every known target (archived or mounted) with its state
+- `create`, `install`, and `uninstall` list known game names (same set,
+  flagging `(repackable)` ones for `create`)
 
 ### Create an archive from a game
 
 ```
-dfsmount create lutris /path/to/existing/mygame-directory
+dfsmount lutris create /path/to/existing/mygame-directory
 ```
 
 Packs the given directory into `mygame-rev1.dfs` inside the `lutris`
@@ -176,7 +243,7 @@ Leave off the source directory to list game names instead of creating an
 archive:
 
 ```
-dfsmount create lutris
+dfsmount lutris create
 ```
 
 ```
@@ -193,23 +260,31 @@ yet, or with an empty/missing overlay, isn't repackable.
 ### Run the service
 
 ```
-sudo dfsmount service
+dfsmount service
 ```
 
-Needs root, purely for fanotify. Reads the whole config, watches every
-configured launcher, and mounts/reaps games automatically — but the actual
-mount/unmount/archive work runs under the credentials of the user set by
-`run_as` in the config (or `-u/--user` on the command line, or `$SUDO_USER`
-if you invoked it with plain `sudo`). This is the one command you actually
-run day-to-day (as a systemd unit, ideally — see below). Everything below
-this is for manual control or debugging — with the service running you
-generally don't need any of it.
+Plain user process, no root. Every `poll_interval` seconds it:
+
+1. Diffs each launcher's `archives_dir` against what it saw last poll —
+   new archives get systemd unit files generated and registered
+   (`systemctl --user daemon-reload`); removed archives have their unit
+   files deleted outright.
+2. Checks whether the launcher is currently running (`/proc` scan). If so,
+   every archived target's overlay automount is armed (`systemctl --user
+   enable --now`); if not, it's disarmed (stopped then disabled) so systemd
+   isn't watching paths the
+   launcher can't currently trigger.
+
+It logs a status line for each unit it registers/removes/arms/disarms. Run
+it as a systemd user unit (see below) so it comes up with your session.
+Everything past this point is for manual control or debugging; with the
+service running you generally don't need any of it.
 
 ### Mount / unmount a game by hand
 
 ```
-dfsmount mount lutris mygame
-dfsmount unmount lutris mygame
+dfsmount lutris mount mygame
+dfsmount lutris unmount mygame
 ```
 
 No root needed. Useful for testing a game outside of a launcher, or forcing
@@ -218,7 +293,7 @@ a mount before the launcher would normally trigger one.
 ### Check on a game
 
 ```
-dfsmount status lutris mygame
+dfsmount lutris status mygame
 ```
 
 ```
@@ -229,52 +304,57 @@ dfsmount status lutris mygame
 ### Write a new revision
 
 ```
-dfsmount repack lutris mygame
+dfsmount lutris repack mygame
 ```
 
-Requires the game to already be mounted (`dfsmount mount` it first, or let
-the service mount it). Packs the current live state into the next
-revision, clears the overlay, and remounts — see [Upgrading a
+Requires the game to already be mounted (`dfsmount lutris mount mygame`
+first, or let the service mount it). Packs the current live state into the
+next revision, clears the overlay, and remounts — see [Upgrading a
 game](#upgrading-a-game) above.
 
 ### Install / uninstall a game
 
 ```
-dfsmount install lutris mygame
-dfsmount install lutris all
-dfsmount uninstall lutris mygame
-dfsmount uninstall lutris all
+dfsmount lutris install mygame
+dfsmount lutris install all
+dfsmount lutris uninstall mygame
+dfsmount lutris uninstall all
 ```
 
 Runs the launcher's `install` (or `uninstall`) hook, passing it the game's
 mount dir. `all` runs it for every game name known to the launcher (same set
-`dfsmount create <launcher>` lists), instead of a single target. These
-commands don't mount or unmount anything themselves — they're for hooks that
+leaving the target off lists), instead of a single target. These commands
+don't mount or unmount anything themselves — they're for hooks that
 register (or remove) a game with the launcher's own library, independent of
 whether it's currently mounted.
 
 ## Example systemd unit
 
-The service itself must run as root (fanotify), but set `run_as` in the
-config (or pass `-u`) so mounts/archives are owned by you, not root. Since
-systemd services don't inherit a login `$HOME`, point `--config` at your
-actual config file explicitly:
+One user unit, running as you. It doesn't inherit a login `$HOME` by
+default, so point `--config` at your actual config file explicitly.
+
+`~/.config/systemd/user/dfsmount.service`:
 
 ```ini
 [Unit]
-Description=dfsmount auto-mount service
-After=local-fs.target
+Description=dfsmount launcher watcher / automount manager (user)
 
 [Service]
-ExecStart=/usr/local/bin/dfsmount service --config /home/alice/.config/dfsmount.yaml
+ExecStart=/usr/local/bin/dfsmount service --config %h/.config/dfsmount.yaml
 Restart=on-failure
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
 
-with `run_as: alice` set in that config file (or add `-u alice` to
-`ExecStart` instead, if you'd rather not put it in the file).
+Enable it: `systemctl --user enable --now dfsmount`. On a headless box
+also run `loginctl enable-linger $USER` so your user session (and any
+armed automounts) survive without a login shell.
+
+The per-game `<ro_mount>.service` and `<mount_dir>.{mount,automount}`
+units it generates under `~/.config/systemd/user/` are managed entirely by
+this service — don't hand-edit them, they get overwritten/removed as
+archives and launcher state change.
 
 ## Notes & caveats
 
@@ -283,10 +363,11 @@ with `run_as: alice` set in that config file (or add `-u alice` to
   while on large game libraries. This happens once, at `create`/`repack`
   time, not on every mount.
 - Mounting is lazy per-*game*, not per-launcher — a launcher with 50 games
-  configured only triggers mounts for the ones it actually opens.
-- If the service restarts while a game is already mounted (e.g. you
-  restarted the service mid-session), it detects and adopts the existing
-  mount rather than re-mounting or erroring.
-- Reaping is use-based (via `fuser -m`), checked every `poll_interval`
-  seconds — a mount is torn down within one interval of becoming idle,
-  independent of whether its launcher is still running.
+  configured only triggers automounts for the ones it actually opens.
+- Idle reaping is systemd's own job (`TimeoutIdleSec=60` on each
+  automount) — a mount is torn down about a minute after becoming idle,
+  independent of whether its launcher is still running or the dfsmount
+  service is even up.
+- The unit name for a `.mount` unit must match its mount path
+  (`systemd-escape --path`), so unit filenames are derived from
+  `working_dir`/`target_mount_dir`, not from the game's name directly.

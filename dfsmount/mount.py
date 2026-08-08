@@ -1,4 +1,8 @@
-"""Mount dwarfs with fuse-overlayfs (writable) at the target path."""
+"""Mount dwarfs with fuse-overlayfs (writable) at the target path.
+
+Always runs as whichever user invokes it - the CLI directly, or the
+unprivileged user-mode service. Neither needs root.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,6 @@ from pathlib import Path
 from .archive import latest_archive
 from .binaries import dwarfs_executable
 from .config import LauncherHooks, require_executable
-from .hooks import run_hook
-from .privsep import UserCreds, as_user
 
 
 @dataclass(frozen=True)
@@ -27,16 +29,10 @@ class TargetPaths:
 
 
 def is_mounted(path: Path) -> bool:
-    return (
-        subprocess.run(
-            ["mountpoint", "-q", str(path)],
-            check=False,
-        ).returncode
-        == 0
-    )
+    return os.path.ismount(path)
 
 
-def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
+def mount(paths: TargetPaths) -> None:
     dwarfs = dwarfs_executable("dwarfs")
     require_executable("fuse-overlayfs")
 
@@ -49,68 +45,59 @@ def mount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
             f"no archive found for target {paths.target!r} in {paths.archives_dir}"
         )
 
-    run_hook(paths.hooks.pre_mount, paths.mount_dir, run_as=run_as)
+    for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+        # Guarantee traversal/access for the invoking user regardless of
+        # the process's current umask.
+        directory.chmod(0o755)
 
-    with as_user(run_as):
-        for directory in (
-            paths.ro_mount,
-            paths.upper,
-            paths.work,
-            paths.mount_dir,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
-
-        if not is_mounted(paths.ro_mount):
-            subprocess.run(
-                [
-                    dwarfs,
-                    "-o",
-                    f"workers={os.cpu_count() or 1}",
-                    "-o",
-                    "block_allocator=mmap",
-                    "-o",
-                    "cachesize=2048M",
-                    "-o",
-                    "readahead=512K",
-                    str(archive),
-                    str(paths.ro_mount),
-                ],
-                check=True,
-            )
-
+    if not is_mounted(paths.ro_mount):
         subprocess.run(
             [
-                "fuse-overlayfs",
+                dwarfs,
                 "-o",
-                f"lowerdir={paths.ro_mount},upperdir={paths.upper},workdir={paths.work}",
-                str(paths.mount_dir),
+                f"uid={os.getuid()}",
+                "-o",
+                f"gid={os.getgid()}",
+                "-o",
+                f"workers={os.cpu_count() or 1}",
+                "-o",
+                "block_allocator=mmap",
+                "-o",
+                "cachesize=2048M",
+                "-o",
+                "readahead=512K",
+                str(archive),
+                str(paths.ro_mount),
             ],
             check=True,
         )
 
-    run_hook(paths.hooks.post_mount, paths.mount_dir, run_as=run_as)
+    subprocess.run(
+        [
+            "fuse-overlayfs",
+            "-o",
+            f"lowerdir={paths.ro_mount},upperdir={paths.upper},workdir={paths.work}",
+            str(paths.mount_dir),
+        ],
+        check=True,
+    )
 
 
-def unmount(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
+def unmount(paths: TargetPaths) -> None:
     require_executable("umount")
 
     if not is_mounted(paths.mount_dir) and not is_mounted(paths.ro_mount):
         return
 
-    run_hook(paths.hooks.pre_unmount, paths.mount_dir, run_as=run_as)
-
-    with as_user(run_as):
-        if is_mounted(paths.mount_dir):
-            subprocess.run(["umount", str(paths.mount_dir)], check=True)
-        if is_mounted(paths.ro_mount):
-            subprocess.run(["umount", str(paths.ro_mount)], check=True)
-
-    run_hook(paths.hooks.post_unmount, paths.mount_dir, run_as=run_as)
+    if is_mounted(paths.mount_dir):
+        subprocess.run(["umount", str(paths.mount_dir)], check=True)
+    if is_mounted(paths.ro_mount):
+        subprocess.run(["umount", str(paths.ro_mount)], check=True)
 
 
-def reset_overlay(paths: TargetPaths, run_as: UserCreds | None = None) -> None:
+def reset_overlay(paths: TargetPaths) -> None:
     """Discard the writable layer. Must be called while unmounted."""
-    with as_user(run_as):
-        for directory in (paths.upper, paths.work):
-            shutil.rmtree(directory, ignore_errors=True)
-            directory.mkdir(parents=True, exist_ok=True)
+    for directory in (paths.upper, paths.work):
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True, exist_ok=True)

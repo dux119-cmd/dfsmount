@@ -12,7 +12,6 @@ fall back to matching the script/module basename in argv, e.g.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 
@@ -38,20 +37,3 @@ def is_launcher_running(name: str) -> bool:
         if comm.startswith("python") and _matches_cmdline(entry, name):
             return True
     return False
-
-
-def is_mount_busy(path: Path) -> bool:
-    """True if any process has an open file, cwd, or mapping under `path`.
-
-    Delegates to `fuser -m`, which checks by mounted device so it catches
-    everything (open fds, mmaps, cwd, exe) - not just files opened after
-    the mount, and works whether or not the accessing process is the one
-    dfsmount originally watched for.
-    """
-    result = subprocess.run(
-        ["fuser", "-m", str(path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0

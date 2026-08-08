@@ -10,7 +10,6 @@ from pathlib import Path
 from .binaries import dwarfs_executable
 from .config import LauncherHooks
 from .hooks import run_hook
-from .privsep import UserCreds, as_user
 
 # Edit to taste - passed as --filter=<pattern> to mkdwarfs.
 MKDWARFS_EXCLUDE_FILTERS: list[str] = []
@@ -44,8 +43,11 @@ def revisions_for_target(archives_dir: Path, target: str) -> list[tuple[int, Pat
 def discover_targets(archives_dir: Path) -> set[str]:
     if not archives_dir.is_dir():
         return set()
-    parsed = (parse_revision(entry.name) for entry in archives_dir.iterdir())
-    return {target for target, _rev in parsed if target}
+    return {
+        parsed[0]
+        for entry in archives_dir.iterdir()
+        if (parsed := parse_revision(entry.name)) is not None
+    }
 
 
 def latest_archive(archives_dir: Path, target: str) -> Path | None:
@@ -68,38 +70,55 @@ def create_archive(
     source_dir: Path,
     archives_dir: Path,
     target: str,
-    run_as: UserCreds | None = None,
     hooks: LauncherHooks | None = None,
 ) -> Path:
-    """Run mkdwarfs against source_dir, writing the next revision for `target`."""
+    """Run mkdwarfs against source_dir, writing the next revision for `target`.
+
+    mkdwarfs writes to a `.dfs.tmp` path and only gets renamed to the real
+    `.dfs` name once it's fully written - `discover_targets`/`latest_archive`
+    only recognize `.dfs`, so nothing (the service, a manual mount) can see
+    or try to mount a still-being-written archive.
+    """
     mkdwarfs = dwarfs_executable("mkdwarfs")
     if not source_dir.is_dir():
         raise NotADirectoryError(f"{source_dir} is not a directory")
 
-    run_hook(hooks.pre_archive if hooks else None, source_dir, run_as=run_as)
+    run_hook(hooks.pre_archive if hooks else None, source_dir)
 
-    with as_user(run_as):
-        archives_dir.mkdir(parents=True, exist_ok=True)
-        output = next_archive_path(archives_dir, target)
+    archives_dir.mkdir(parents=True, exist_ok=True)
+    output = next_archive_path(archives_dir, target)
+    temp_output = output.with_name(f"{output.name}.tmp")
 
-        command = [mkdwarfs]
-        for pattern in MKDWARFS_EXCLUDE_FILTERS:
-            command.append(f"--filter={pattern}")
-        command += [
-            "--force",
-            "--progress=simple",
-            "--categorize",
-            "--compress-level=9",
-            "--compression=zstd:level=6:long:wlog=31:strat=3",
-            f"--input={source_dir}",
-            f"--output={output}",
-        ]
+    command = [mkdwarfs]
+    for pattern in MKDWARFS_EXCLUDE_FILTERS:
+        command.append(f"--filter={pattern}")
+    command += [
+        "--force",
+        "--progress=simple",
+        "--categorize",
+        "--compress-level=9",
+        "--compression=zstd:level=6:long:wlog=31:strat=3",
+        f"--input={source_dir}",
+        f"--output={temp_output}",
+    ]
+    try:
         subprocess.run(command, check=True)
+    except subprocess.CalledProcessError:
+        temp_output.unlink(missing_ok=True)
+        raise
+    temp_output.rename(output)
 
-    run_hook(
-        hooks.post_archive if hooks else None,
-        source_dir,
-        output,
-        run_as=run_as,
-    )
+    run_hook(hooks.post_archive if hooks else None, source_dir, output)
     return output
+
+
+def archive_source_dir(source_dir: Path) -> Path:
+    """Rename the now-archived source directory out of the way with an
+    "-archived" suffix, so it no longer occupies the path the target will
+    later be mounted at. A no-op if that name is already taken (e.g.
+    re-archiving the same source twice)."""
+    renamed = source_dir.with_name(f"{source_dir.name}-archived")
+    if renamed.exists():
+        return source_dir
+    source_dir.rename(renamed)
+    return renamed

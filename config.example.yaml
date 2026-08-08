@@ -1,9 +1,9 @@
 # Example dfsmount config. Default lookup path: ~/.config/dfsmount.yaml
-poll_interval: 2  # seconds between /proc scans; fanotify events are handled immediately
+poll_interval: 2  # seconds between /proc scans and archive/unit reconciliation
 
-# Only needed for `dfsmount service` (which must run as root, for fanotify).
-# Mounts, unmounts, and archive creation all run as this user - never root.
-run_as: alice
+# `dfsmount service` is a plain user-space process: it watches for the
+# launcher below, and generates + arms systemd user automount units for
+# each of its archived games. No root, no fanotify.
 
 launchers:
   - name: launcherexec          # matched against /proc/<pid>/comm (15-char truncated)
@@ -14,19 +14,13 @@ launchers:
     # Optional, all omittable. Each value is a shell command (parsed like a
     # shell command line), or a list of shell commands to run in sequence;
     # the relevant path(s) are appended as extra arguments. Run under
-    # `run_as`'s credentials, never root. A failing hook is logged but does
-    # not block the mount/archive operation it wraps.
+    # whichever user invoked dfsmount - never root. A failing hook is logged
+    # but does not block the archive operation it wraps.
     # Paths can be absolute, start with "~", relative to the user's home
     # dir, or start with "builtin:" for a hook script bundled with dfsmount
     # (e.g. "builtin:hooks/lutris/prepack.sh").
     hooks:
       pre_archive: .local/bin/before-pack.sh      # arg: source_dir
       post_archive: .local/bin/after-pack.sh      # args: source_dir, archive_path
-      pre_mount: .local/bin/before-mount.sh       # arg: mount_dir
-      post_mount:                                 # arg: mount_dir (list = sequential)
-        - builtin:hooks/lutris/verify-install.sh
-        - .local/bin/after-mount.sh
-      pre_unmount: .local/bin/before-unmount.sh   # arg: mount_dir
-      post_unmount: .local/bin/after-unmount.sh   # arg: mount_dir
       install: .local/bin/install-into-lutris.sh    # arg: mount_dir; `dfsmount install`
       uninstall: .local/bin/remove-from-lutris.sh   # arg: mount_dir; `dfsmount uninstall`

@@ -1,21 +1,19 @@
 """Executable checks and the YAML service configuration.
 
-Config lives at ~/.config/dfsmount.yaml for the user who owns the games
-(override with -c/--config). Paths inside it may use "~" or be given
-relative to that user's home (e.g. "Games" -> "~/Games").
+Config lives at ~/.config/dfsmount.yaml for the invoking user (override with
+-c/--config). Paths inside it may use "~" or be given relative to that
+user's home (e.g. "Games" -> "~/Games"). Everything - CLI and service -
+always acts as whoever invokes it; there's no privilege split.
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass, fields
 from functools import cache
 from pathlib import Path
 
 import yaml
-
-from .privsep import UserCreds, lookup_user
 
 
 @cache
@@ -28,33 +26,20 @@ def require_executable(name: str) -> None:
         raise FileNotFoundError(f"required executable not found on PATH: {name}")
 
 
-def _invoking_home() -> Path:
-    """Home directory of the human behind this process.
-
-    Under plain `dfsmount ...` this is just the current user. Under
-    `sudo dfsmount service`, sudo commonly resets $HOME to root's, so prefer
-    $SUDO_USER's home when we're root and it's set.
-    """
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and os.geteuid() == 0:
-        try:
-            return Path(lookup_user(sudo_user).home)
-        except SystemExit:
-            pass
-    return Path.home()
-
-
 def default_config_path() -> Path:
-    return _invoking_home() / ".config" / "dfsmount.yaml"
+    return Path.home() / ".config" / "dfsmount.yaml"
+
+
+def ensure_config_exists(path: Path) -> None:
+    """Write an empty config skeleton if `path` doesn't exist yet."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("launchers: []\n")
 
 
 def resolve_user_path(raw: str, home: Path) -> Path:
-    """Expand "~" and resolve bare-relative paths against `home`.
-
-    Expands "~" against `home` explicitly rather than via Path.expanduser(),
-    since expanduser() uses this process's own home (root, when running as
-    the service) - not necessarily the target user's.
-    """
+    """Expand "~" and resolve bare-relative paths against `home`."""
     if raw == "~" or raw.startswith("~/"):
         raw = raw.replace("~", str(home), 1)
     path = Path(raw)
@@ -78,10 +63,6 @@ class LauncherHooks:
 
     pre_archive: HookCommands = None  # given: source_dir
     post_archive: HookCommands = None  # given: source_dir, archive_path
-    pre_mount: HookCommands = None  # given: mount_dir
-    post_mount: HookCommands = None  # given: mount_dir
-    pre_unmount: HookCommands = None  # given: mount_dir
-    post_unmount: HookCommands = None  # given: mount_dir
     install: HookCommands = None  # given: mount_dir
     uninstall: HookCommands = None  # given: mount_dir
 
@@ -104,15 +85,12 @@ class LauncherConfig:
 class ServiceConfig:
     poll_interval: float
     launchers: tuple[LauncherConfig, ...]
-    run_as: str | None  # username that owns mounts/archives; required for `service`
 
 
 def load_config(path: Path | None = None) -> ServiceConfig:
     path = path or default_config_path()
     raw = yaml.safe_load(path.read_text()) or {}
-
-    run_as = raw.get("run_as")
-    home = Path(lookup_user(run_as).home) if run_as else _invoking_home()
+    home = Path.home()
 
     launchers = tuple(
         LauncherConfig(
@@ -127,7 +105,6 @@ def load_config(path: Path | None = None) -> ServiceConfig:
     return ServiceConfig(
         poll_interval=float(raw.get("poll_interval", 2)),
         launchers=launchers,
-        run_as=run_as,
     )
 
 
@@ -136,17 +113,3 @@ def find_launcher(config: ServiceConfig, name: str) -> LauncherConfig:
         if launcher.name == name:
             return launcher
     raise SystemExit(f"no launcher named {name!r} in config")
-
-
-def resolve_run_as(config: ServiceConfig, override: str | None) -> UserCreds:
-    """The user whose credentials mounts/archives/creates should run under.
-
-    Priority: --user flag > config's run_as > $SUDO_USER (sudo dfsmount ...).
-    """
-    name = override or config.run_as or os.environ.get("SUDO_USER")
-    if not name:
-        raise SystemExit(
-            "dfsmount: no target user - set run_as in config.yaml, "
-            "pass -u/--user, or run via `sudo dfsmount ...`"
-        )
-    return lookup_user(name)
