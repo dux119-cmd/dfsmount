@@ -80,7 +80,7 @@ def create_archive(paths: TargetPaths, source_dir: Path) -> Path:
         "--progress=simple",
         "--categorize",
         "--compress-level=9",
-        "--compression=zstd:level=6:long:wlog=31:strat=3",
+        "--compression=zstd:level=6:long:wlog=30:strat=3",
         f"--input={source_dir}",
         f"--output={temp_output}",
     ]
