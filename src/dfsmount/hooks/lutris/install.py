@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """dfsmount install hook: register an archived game with Lutris.
 
-Run as `builtin:hooks/lutris/install.py <mount_dir>` (via `dfsmount install`).
-Reads .metadata/ (see hooks/metadata.py), restores paths to mount_dir, and
-writes the Lutris config, pga.db row, and artwork. Exits 0 if there's no
-Lutris metadata, or if the game is already installed.
+Run as `builtin:lutris/install.py <mount_dir>` (via `dfsmount install`).
+Reads .dfsmount/config.yml's "game:" section (id/name/runner/platform/
+year), restores it to mount_dir, and writes the Lutris config, pga.db row,
+and artwork. `directory` is set from mount_dir and `configpath` from the
+slug; whatever art files are present under .dfsmount/art/ are installed
+as-is. Exits 0 if there's no captured metadata, or if the game is already
+installed.
 """
 
 from __future__ import annotations
@@ -14,21 +17,24 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _lutris_common import (  # noqa: E402
+    ROOT_PLACEHOLDER,
     LutrisPaths,
     artwork_paths,
+    config_path,
     connect,
+    dfsmount_config_path,
+    find_dfsmount_art,
     insert_game,
+    parse_game_section,
     prepare_for_insert,
 )
-from metadata import find_art, read, restore_root  # noqa: E402
 
 
 def install_artwork(mount_dir: Path, paths: LutrisPaths, slug: str) -> None:
     for name, stem in artwork_paths(paths, slug).items():
-        source = find_art(mount_dir, name)
+        source = find_dfsmount_art(mount_dir, name)
         if source is None:
             continue
         destination = Path(f"{stem}{source.suffix}")
@@ -42,15 +48,21 @@ def main() -> int:
         return 1
 
     mount_dir = Path(sys.argv[1]).resolve()
-    meta = read(mount_dir)
-    if meta is None or meta.launcher != "lutris":
+    captured = dfsmount_config_path(mount_dir)
+    if not captured.exists():
         print(
             f"install: no Lutris metadata under {mount_dir}, skipping", file=sys.stderr
         )
         return 0
 
+    config_text = captured.read_text(encoding="utf-8")
+    fields = parse_game_section(config_text)
+    slug = fields.get("id")
+    if not slug:
+        print(f"install: {captured} has no game.id, skipping", file=sys.stderr)
+        return 0
+
     paths = LutrisPaths.for_home(Path.home())
-    slug = meta.id
 
     existing_id = None
     with connect(paths.db_path) as connection:
@@ -65,18 +77,21 @@ def main() -> int:
                 return 0
             existing_id = row["id"]
 
-    extra = restore_root(meta.extra, mount_dir)
-    database_row = {
-        **extra,
-        "slug": slug,
-        "name": meta.name,
-        "runner": meta.runner,
-    }
-
-    config_text = meta.config_text.replace("{{GAME_ROOT}}", str(mount_dir))
-    config_file_path = paths.games_config_dir / f"{database_row['configpath']}.yml"
+    config_text = config_text.replace(ROOT_PLACEHOLDER, str(mount_dir))
+    config_file_path = config_path(paths, slug)
     config_file_path.parent.mkdir(parents=True, exist_ok=True)
     config_file_path.write_text(config_text, encoding="utf-8")
+
+    database_row = {
+        "slug": slug,
+        "name": fields.get("name") or slug,
+        "runner": fields.get("runner") or None,
+        "platform": fields.get("platform") or None,
+        "year": fields.get("year") or None,
+        "directory": str(mount_dir),
+        "configpath": slug,
+        "installed": 1,
+    }
 
     with connect(paths.db_path) as connection:
         insert_game(connection, prepare_for_insert(database_row, existing_id))

@@ -1,8 +1,9 @@
-"""dfsmount: create, service, mount, unmount, repack, status, install, uninstall.
+"""dfsmount: pack, service, mount, unmount, repack, status, install, remove.
 
 Invocation: `dfsmount [launcher] <action> [target] [options]`. Launcher can
-be omitted if only one is configured. `service`/`fetch-binaries` take no
-launcher. Omitting `target` where one applies lists names instead of acting.
+be omitted if only one is configured. `service`/`service-install`/
+`service-remove`/`fetch-binaries` take no launcher. Omitting `target` where
+one applies lists names instead of acting.
 """
 
 from __future__ import annotations
@@ -25,10 +26,15 @@ from .config import (
     resolve_user_path,
 )
 from .games import list_games, list_mounted
-from .models import LauncherConfig, ServiceConfig
+from .models import LauncherConfig, ServiceConfig, TargetPaths
 
-LAUNCHER_FREE_COMMANDS = ("service", "fetch-binaries")
-ACTIONS = ("create", "mount", "unmount", "repack", "status", "install", "uninstall")
+LAUNCHER_FREE_COMMANDS = (
+    "service",
+    "service-install",
+    "service-remove",
+    "fetch-binaries",
+)
+ACTIONS = ("pack", "mount", "unmount", "repack", "status", "install", "remove")
 
 
 def _print_names(names: list[str], empty_message: str) -> None:
@@ -73,12 +79,12 @@ def _list_status(launcher: LauncherConfig) -> None:
         print(f"no targets found for {launcher.name}")
         return
     for name in names:
-        paths = service.target_paths(launcher, name)
+        paths = TargetPaths.for_target(launcher, name)
         state = "mounted" if mount_mod.is_mounted(paths.mount_dir) else "not mounted"
         print(f"{name}: {state}")
 
 
-def cmd_create(launcher: LauncherConfig, args: argparse.Namespace) -> None:
+def cmd_pack(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.source is None:
         _list_games(launcher)
         return
@@ -91,9 +97,8 @@ def cmd_create(launcher: LauncherConfig, args: argparse.Namespace) -> None:
         source = launcher.target_mount_dir / args.source
 
     target = archive.target_from_source(source)
-    output = archive.create_archive(
-        source, launcher.archives_dir, target, hooks=launcher.hooks
-    )
+    paths = TargetPaths.for_target(launcher, target)
+    output = archive.create_archive(paths, source)
     archived_dir = archive.archive_source_dir(source)
     print(f"created {output} (target: {target})")
     print(f"moved {source} -> {archived_dir}")
@@ -107,7 +112,7 @@ def cmd_mount(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.target is None:
         _list_available(launcher)
         return
-    paths = service.target_paths(launcher, args.target)
+    paths = TargetPaths.for_target(launcher, args.target)
     mount_mod.mount(paths)
     print(f"{paths.mount_dir} mounted")
 
@@ -116,7 +121,7 @@ def cmd_unmount(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.target is None:
         _list_mounted(launcher)
         return
-    paths = service.target_paths(launcher, args.target)
+    paths = TargetPaths.for_target(launcher, args.target)
     mount_mod.unmount(paths)
     print(f"{paths.mount_dir} unmounted")
 
@@ -125,7 +130,7 @@ def cmd_repack(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.target is None:
         _list_repackable(launcher)
         return
-    paths = service.target_paths(launcher, args.target)
+    paths = TargetPaths.for_target(launcher, args.target)
     output = repack_mod.repack(paths)
     print(f"created {output}")
 
@@ -134,9 +139,9 @@ def cmd_status(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.target is None:
         _list_status(launcher)
         return
-    paths = service.target_paths(launcher, args.target)
+    paths = TargetPaths.for_target(launcher, args.target)
     state = "mounted" if mount_mod.is_mounted(paths.mount_dir) else "not mounted"
-    latest = archive.latest_archive(paths.archives_dir, paths.target)
+    latest = archive.latest_archive(paths)
     print(f"{paths.mount_dir}: {state}")
     print(f"  latest archive: {latest}")
 
@@ -151,7 +156,7 @@ def _run_install_hook(
     launcher: LauncherConfig, target: str, hook_name: str, verb: str
 ) -> None:
     for name in _install_targets(launcher, target):
-        paths = service.target_paths(launcher, name)
+        paths = TargetPaths.for_target(launcher, name)
         hooks_mod.run_hook(getattr(paths.hooks, hook_name), paths.mount_dir)
         print(f"{verb} {name}")
 
@@ -163,11 +168,11 @@ def cmd_install(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     _run_install_hook(launcher, args.target, "install", "installed")
 
 
-def cmd_uninstall(launcher: LauncherConfig, args: argparse.Namespace) -> None:
+def cmd_remove(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     if args.target is None:
         _list_games(launcher)
         return
-    _run_install_hook(launcher, args.target, "uninstall", "uninstalled")
+    _run_install_hook(launcher, args.target, "remove", "removed")
 
 
 def cmd_fetch_binaries(args: argparse.Namespace) -> None:
@@ -213,7 +218,7 @@ _ACTION_HELP = {
     "repack": "target name; omit to list repackable targets",
     "status": "target name; omit to list all known targets",
     "install": "target name, or 'all' for every known game; omit to list game names",
-    "uninstall": "target name, or 'all' for every known game; omit to list game names",
+    "remove": "target name, or 'all' for every known game; omit to list game names",
 }
 _ACTION_HANDLERS = {
     "mount": cmd_mount,
@@ -221,22 +226,22 @@ _ACTION_HANDLERS = {
     "repack": cmd_repack,
     "status": cmd_status,
     "install": cmd_install,
-    "uninstall": cmd_uninstall,
+    "remove": cmd_remove,
 }
 
 
 def _dispatch_launcher_command(
     launcher: LauncherConfig, action: str, action_args: list[str]
 ) -> None:
-    if action == "create":
-        p = argparse.ArgumentParser(prog="dfsmount create", add_help=True)
+    if action == "pack":
+        p = argparse.ArgumentParser(prog="dfsmount pack", add_help=True)
         p.add_argument(
             "source",
             nargs="?",
             default=None,
             help="directory to archive; omit to list this launcher's game names",
         )
-        cmd_create(launcher, p.parse_args(action_args))
+        cmd_pack(launcher, p.parse_args(action_args))
         return
 
     if action in _ACTION_HANDLERS:
@@ -278,6 +283,16 @@ def _main(argv: list[str] | None) -> None:
             rest[1:]
         )
         cmd_service(load_config(config_path))
+        return
+
+    if rest[0] in ("service-install", "service-remove"):
+        argparse.ArgumentParser(prog=f"dfsmount {rest[0]}", add_help=True).parse_args(
+            rest[1:]
+        )
+        if rest[0] == "service-install":
+            service.install_service()
+        else:
+            service.remove_service()
         return
 
     if rest[0] == "fetch-binaries":

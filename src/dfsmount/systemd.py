@@ -153,3 +153,11 @@ def start_units(names: list[str]) -> None:
 def stop_units(names: list[str]) -> None:
     if names:
         _systemctl("stop", *names)
+
+
+def enable_service(name: str) -> None:
+    _systemctl("enable", "--now", name)
+
+
+def disable_service(name: str) -> None:
+    _systemctl("disable", "--now", name)

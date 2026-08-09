@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .archive import discover_targets, latest_archive
-from .models import GameStatus, LauncherConfig
+from .models import GameStatus, LauncherConfig, TargetPaths
 from .mount import is_mounted
 
 
@@ -22,9 +22,9 @@ def list_games(launcher: LauncherConfig) -> list[GameStatus]:
     names = sorted(from_dir | discover_targets(launcher.archives_dir))
 
     def repackable(name: str) -> bool:
-        has_archive = latest_archive(launcher.archives_dir, name) is not None
-        overlay = launcher.working_dir / name / "upper"
-        return has_archive and _has_overlay_content(overlay)
+        paths = TargetPaths.for_target(launcher, name)
+        has_archive = latest_archive(paths) is not None
+        return has_archive and _has_overlay_content(paths.upper)
 
     return [GameStatus(name=n, repackable=repackable(n)) for n in names]
 

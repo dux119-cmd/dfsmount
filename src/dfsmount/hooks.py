@@ -7,13 +7,13 @@ import subprocess
 from pathlib import Path
 
 _BUILTIN_PREFIX = "builtin:"
-_PACKAGE_ROOT = Path(__file__).resolve().parent
+_HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 
 
 def _resolve_builtin(token: str) -> str:
     if not token.startswith(_BUILTIN_PREFIX):
         return token
-    return str(_PACKAGE_ROOT / token.removeprefix(_BUILTIN_PREFIX))
+    return str(_HOOKS_DIR / token.removeprefix(_BUILTIN_PREFIX))
 
 
 def run_hook(commands: str | list[str] | None, *args: Path) -> None:

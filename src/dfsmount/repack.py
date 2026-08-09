@@ -14,9 +14,7 @@ def repack(paths: TargetPaths) -> Path:
     if not was_mounted:
         mount(paths)
 
-    output = create_archive(
-        paths.mount_dir, paths.archives_dir, paths.target, hooks=paths.hooks
-    )
+    output = create_archive(paths, paths.mount_dir)
 
     unmount(paths)
     reset_overlay(paths)

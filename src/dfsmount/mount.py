@@ -23,7 +23,7 @@ def mount(paths: TargetPaths) -> None:
     if is_mounted(paths.mount_dir):
         return
 
-    archive = latest_archive(paths.archives_dir, paths.target)
+    archive = latest_archive(paths)
     if archive is None:
         raise FileNotFoundError(
             f"no archive found for target {paths.target!r} in {paths.archives_dir}"

@@ -7,6 +7,8 @@ its launcher is running and disarms (stops) it otherwise.
 
 from __future__ import annotations
 
+import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 
@@ -15,7 +17,10 @@ from .config import require_executable
 from .launcher import is_launcher_running
 from .models import LauncherConfig, ServiceConfig, TargetPaths
 from .systemd import (
+    UNIT_DIR,
     daemon_reload,
+    disable_service,
+    enable_service,
     owned_units,
     owner_tag,
     remove_units,
@@ -26,17 +31,34 @@ from .systemd import (
     write_units,
 )
 
+SERVICE_UNIT_NAME = "dfsmount.service"
 
-def target_paths(launcher: LauncherConfig, target: str) -> TargetPaths:
-    return TargetPaths(
-        target=target,
-        archives_dir=launcher.archives_dir,
-        mount_dir=launcher.target_mount_dir / target,
-        ro_mount=launcher.working_dir / target / "ro",
-        upper=launcher.working_dir / target / "upper",
-        work=launcher.working_dir / target / "work",
-        hooks=launcher.hooks,
+
+def _service_unit_content() -> str:
+    executable = shutil.which("dfsmount") or f"{sys.executable} -m dfsmount"
+    return (
+        "[Unit]\n"
+        "Description=dfsmount launcher watcher\n\n"
+        "[Service]\n"
+        f"ExecStart={executable} service\n"
+        "Restart=on-failure\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
     )
+
+
+def install_service() -> None:
+    require_executable("systemctl")
+    write_units({SERVICE_UNIT_NAME: _service_unit_content()})
+    daemon_reload()
+    enable_service(SERVICE_UNIT_NAME)
+
+
+def remove_service() -> None:
+    require_executable("systemctl")
+    disable_service(SERVICE_UNIT_NAME)
+    (UNIT_DIR / SERVICE_UNIT_NAME).unlink(missing_ok=True)
+    daemon_reload()
 
 
 @dataclass
@@ -81,7 +103,7 @@ def _valid_owners(config: ServiceConfig) -> set[str]:
         owner_tag(launcher.name, target)
         for launcher in config.launchers
         for target in discover_targets(launcher.archives_dir)
-        if latest_archive(launcher.archives_dir, target) is not None
+        if latest_archive(TargetPaths.for_target(launcher, target)) is not None
     }
 
 
@@ -97,8 +119,8 @@ def _purge_stale_units(config: ServiceConfig) -> None:
 
 
 def _add_target(launcher: LauncherConfig, target: str) -> None:
-    paths = target_paths(launcher, target)
-    archive = latest_archive(paths.archives_dir, target)
+    paths = TargetPaths.for_target(launcher, target)
+    archive = latest_archive(paths)
     if archive is None:
         return
     for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
@@ -110,17 +132,17 @@ def _add_target(launcher: LauncherConfig, target: str) -> None:
 
 
 def _remove_target(launcher: LauncherConfig, target: str) -> None:
-    names = unit_names(target_paths(launcher, target))
+    names = unit_names(TargetPaths.for_target(launcher, target))
     remove_units(names.all_names())
     daemon_reload()
     print(f"[dfsmount] {launcher.name}/{target}: removed mount units")
 
 
 def _arm_target(launcher: LauncherConfig, target: str) -> None:
-    start_units([unit_names(target_paths(launcher, target)).overlay_mount])
+    start_units([unit_names(TargetPaths.for_target(launcher, target)).overlay_mount])
     print(f"[dfsmount] {launcher.name}/{target}: mounted")
 
 
 def _disarm_target(launcher: LauncherConfig, target: str) -> None:
-    stop_units([unit_names(target_paths(launcher, target)).overlay_mount])
+    stop_units([unit_names(TargetPaths.for_target(launcher, target)).overlay_mount])
     print(f"[dfsmount] {launcher.name}/{target}: unmounted")

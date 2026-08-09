@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .binaries import dwarfs_executable
 from .hooks import run_hook
-from .models import LauncherHooks
+from .models import TargetPaths
 
 MKDWARFS_EXCLUDE_FILTERS: list[str] = []  # passed as --filter=<pattern> to mkdwarfs
 
@@ -24,13 +24,13 @@ def parse_revision(filename: str) -> tuple[str, int] | None:
     return match.group("target"), int(match.group("rev"))
 
 
-def revisions_for_target(archives_dir: Path, target: str) -> list[tuple[int, Path]]:
-    if not archives_dir.is_dir():
+def revisions_for_target(paths: TargetPaths) -> list[tuple[int, Path]]:
+    if not paths.archives_dir.is_dir():
         return []
     found = []
-    for entry in archives_dir.iterdir():
+    for entry in paths.archives_dir.iterdir():
         parsed = parse_revision(entry.name)
-        if parsed and parsed[0] == target:
+        if parsed and parsed[0] == paths.target:
             found.append((parsed[1], entry))
     return sorted(found)
 
@@ -45,36 +45,31 @@ def discover_targets(archives_dir: Path) -> set[str]:
     }
 
 
-def latest_archive(archives_dir: Path, target: str) -> Path | None:
-    revisions = revisions_for_target(archives_dir, target)
+def latest_archive(paths: TargetPaths) -> Path | None:
+    revisions = revisions_for_target(paths)
     return revisions[-1][1] if revisions else None
 
 
-def next_archive_path(archives_dir: Path, target: str) -> Path:
-    revisions = revisions_for_target(archives_dir, target)
+def next_archive_path(paths: TargetPaths) -> Path:
+    revisions = revisions_for_target(paths)
     next_rev = revisions[-1][0] + 1 if revisions else 1
-    return archives_dir / f"{target}-rev{next_rev}.dfs"
+    return paths.archives_dir / f"{paths.target}-rev{next_rev}.dfs"
 
 
 def target_from_source(source_dir: Path) -> str:
     return source_dir.resolve().name
 
 
-def create_archive(
-    source_dir: Path,
-    archives_dir: Path,
-    target: str,
-    hooks: LauncherHooks | None = None,
-) -> Path:
-    """Run mkdwarfs against source_dir, writing the next revision for `target`."""
+def create_archive(paths: TargetPaths, source_dir: Path) -> Path:
+    """Run mkdwarfs against source_dir, writing the next revision for paths.target."""
     mkdwarfs = dwarfs_executable("mkdwarfs")
     if not source_dir.is_dir():
         raise NotADirectoryError(f"{source_dir} is not a directory")
 
-    run_hook(hooks.pre_archive if hooks else None, source_dir)
+    run_hook(paths.hooks.pre_archive, source_dir)
 
-    archives_dir.mkdir(parents=True, exist_ok=True)
-    output = next_archive_path(archives_dir, target)
+    paths.archives_dir.mkdir(parents=True, exist_ok=True)
+    output = next_archive_path(paths)
     temp_output = output.with_name(f"{output.name}.tmp")
 
     command = [mkdwarfs]
@@ -96,7 +91,7 @@ def create_archive(
         raise
     temp_output.rename(output)
 
-    run_hook(hooks.post_archive if hooks else None, source_dir, output)
+    run_hook(paths.hooks.post_archive, source_dir, output)
     return output
 
 

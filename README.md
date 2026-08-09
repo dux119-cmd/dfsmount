@@ -11,6 +11,12 @@ own user via `systemctl --user` — no root.
 pip install .
 ```
 
+Or run it in place without installing, from a checkout:
+
+```
+./dfsmount ...
+```
+
 Requires Python ≥ 3.10, `pyyaml`, `fuse-overlayfs`, `systemd` (user mode),
 and the `dwarfs` tools (`mkdwarfs`, `dwarfs`, `dwarfsck`, `dwarfsextract`):
 
@@ -30,33 +36,34 @@ launchers:
     working_dir: .local/state/dfsmount/lutris
     target_mount_dir: Games/lutris
     hooks:
-      pre_archive: builtin:hooks/lutris/prepack.py
-      install: builtin:hooks/lutris/install.py
-      uninstall: builtin:hooks/lutris/uninstall.py
+      pre_archive: builtin:lutris/pack.py
+      install: builtin:lutris/install.py
+      remove: builtin:lutris/remove.py
 ```
 
 Paths may be absolute, `~`-relative, or bare-relative (resolved against
 `$HOME`). Hooks can be a single command or a list; `builtin:` refers to a
-script bundled with dfsmount.
+script bundled with dfsmount, resolved relative to its `hooks/` directory
+(e.g. `builtin:lutris/pack.py` -> `dfsmount/hooks/lutris/pack.py`).
 
 ## Usage
 
 ```
-dfsmount <launcher> <action> [target]
+dfsmount <launcher> <action> [target] [options]
 ```
 
 Leave off `<launcher>` if you only have one configured. Leave off `[target]`
 to list the names available for that action.
 
 ```
-dfsmount lutris create ~/Games/lutris/live/mygame   # archive a directory
+dfsmount lutris pack ~/Games/lutris/live/mygame     # archive a directory
 dfsmount lutris mount mygame                        # mount it by hand
 dfsmount lutris unmount mygame
 dfsmount lutris repack mygame                        # bake live changes into a new revision
 dfsmount lutris status mygame
 dfsmount lutris install mygame                       # register with the launcher
 dfsmount lutris install all
-dfsmount lutris uninstall mygame                     # remove from the launcher
+dfsmount lutris remove mygame                        # remove from the launcher
 ```
 
 Run `dfsmount service` as a background process (see below) and mounting
@@ -65,22 +72,24 @@ commands above are for manual control and debugging.
 
 ## Run the service
 
-`~/.config/systemd/user/dfsmount.service`:
+```
+dfsmount service-install   # writes ~/.config/systemd/user/dfsmount.service,
+                            # daemon-reloads, and starts it
+dfsmount service-remove    # stops and removes it
+```
+
+`service-install` writes a unit equivalent to:
 
 ```ini
 [Unit]
 Description=dfsmount launcher watcher
 
 [Service]
-ExecStart=/usr/local/bin/dfsmount service --config %h/.config/dfsmount.yaml
+ExecStart=dfsmount service
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
-```
-
-```
-systemctl --user enable --now dfsmount
 ```
 
 On a headless box, also run `loginctl enable-linger $USER` so your session
@@ -88,13 +97,16 @@ On a headless box, also run `loginctl enable-linger $USER` so your session
 
 ## Portable metadata
 
-The Lutris `pre_archive` hook writes a launcher-agnostic `.metadata/`
-directory (game name, runner, launch config, artwork) into the archive
-itself, instead of leaving that information only in Lutris's own database.
-The `install` hook reads it back to register the game. This makes an
-archive self-contained: it can be installed into Lutris on a different
-machine, or a different launcher's hooks can read the same `.metadata/`
-format. See `dfsmount/hooks/metadata.py`.
+The Lutris `pre_archive` hook writes the game's id, name, runner, platform,
+and year into the `game:` section of a portable `.dfsmount/config.yml`
+(plus `.dfsmount/art/`) inside the archive itself, instead of leaving that
+information only in Lutris's own database. The `install` hook reads it
+back to register the game: `directory` is set from the mount path,
+`configpath` from the slug, and `installed` is always set to `1`. Artwork
+under `.dfsmount/art/` is installed as-is — whatever files are present are
+what gets restored. This makes an archive self-contained: it can be
+installed into Lutris on a different machine. See
+`dfsmount/hooks/lutris/_lutris_common.py`.
 
 ## Notes
 
