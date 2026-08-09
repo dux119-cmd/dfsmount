@@ -36,7 +36,7 @@ launchers:
     working_dir: .local/state/dfsmount/lutris
     target_mount_dir: Games/lutris
     hooks:
-      pre_archive: builtin:lutris/pack.py
+      pack: builtin:lutris/pack.py
       install: builtin:lutris/install.py
       remove: builtin:lutris/remove.py
 ```
@@ -97,7 +97,7 @@ On a headless box, also run `loginctl enable-linger $USER` so your session
 
 ## Portable metadata
 
-The Lutris `pre_archive` hook writes the game's id, name, runner, platform,
+The Lutris `pack` hook writes the game's id, name, runner, platform,
 and year into the `game:` section of a portable `.dfsmount/config.yml`
 (plus `.dfsmount/art/`) inside the archive itself, instead of leaving that
 information only in Lutris's own database. The `install` hook reads it

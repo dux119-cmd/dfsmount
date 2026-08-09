@@ -66,7 +66,7 @@ def create_archive(paths: TargetPaths, source_dir: Path) -> Path:
     if not source_dir.is_dir():
         raise NotADirectoryError(f"{source_dir} is not a directory")
 
-    run_hook(paths.hooks.pre_archive, source_dir)
+    run_hook(paths.hooks.pack, source_dir)
 
     paths.archives_dir.mkdir(parents=True, exist_ok=True)
     output = next_archive_path(paths)

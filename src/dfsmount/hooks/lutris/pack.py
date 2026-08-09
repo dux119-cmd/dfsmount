@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dfsmount pre_archive hook: capture a game's Lutris metadata.
+"""dfsmount pack hook: capture a game's Lutris metadata.
 
 Run as `builtin:lutris/pack.py <source_dir>` before source_dir is archived.
 Writes id/name/runner/platform/year into the "game:" section of a portable

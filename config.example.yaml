@@ -8,6 +8,6 @@ launchers:
     target_mount_dir: Games/lutris         # each target mounts at <this>/<target>
 
     hooks:
-      pre_archive: builtin:lutris/pack.py     # captures Lutris metadata
+      pack: builtin:lutris/pack.py     # captures Lutris metadata
       install: builtin:lutris/install.py      # registers with Lutris
       remove: builtin:lutris/remove.py        # removes from Lutris
