@@ -11,7 +11,6 @@ HookCommands = str | list[str] | None
 @dataclass(frozen=True)
 class LauncherHooks:
     pack: HookCommands = None  # given: source_dir
-    post_archive: HookCommands = None  # given: source_dir, archive_path
     install: HookCommands = None  # given: mount_dir
     remove: HookCommands = None  # given: mount_dir
 

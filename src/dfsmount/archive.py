@@ -91,7 +91,6 @@ def create_archive(paths: TargetPaths, source_dir: Path) -> Path:
         raise
     temp_output.rename(output)
 
-    run_hook(paths.hooks.post_archive, source_dir, output)
     return output
 
 
