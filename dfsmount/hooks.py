@@ -1,14 +1,4 @@
-"""Run optional user-configured shell hooks around archive/mount lifecycle events.
-
-Each hook is a shell command string from config.yaml, or a list of them to run
-in sequence; the relevant path(s) are appended as extra argv entries. A
-command may start with "builtin:" to reference a hook script bundled with
-dfsmount, relative to the package root (e.g. "builtin:hooks/lutris/prepack.sh").
-Hooks run under the same credentials as the process invoking them (the CLI
-user, or the unprivileged user-mode service) - never as root. A hook that
-fails or is missing is logged and does not abort the underlying mount/archive
-operation - hooks are user extensions, not part of the core contract.
-"""
+"""Run user-configured shell hooks. Failures are logged, never fatal."""
 
 from __future__ import annotations
 
@@ -23,8 +13,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 def _resolve_builtin(token: str) -> str:
     if not token.startswith(_BUILTIN_PREFIX):
         return token
-    relative = token.removeprefix(_BUILTIN_PREFIX)
-    return str(_PACKAGE_ROOT / relative)
+    return str(_PACKAGE_ROOT / token.removeprefix(_BUILTIN_PREFIX))
 
 
 def run_hook(commands: str | list[str] | None, *args: Path) -> None:

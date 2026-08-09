@@ -1,13 +1,8 @@
 """Cheap /proc-based launcher process-name lookup.
 
-Note: /proc/<pid>/comm is truncated to 15 characters (TASK_COMM_LEN - 1), same
-as `ps -C` / `pgrep -x`. Use the truncated name in config if a launcher name is
-longer than that.
-
-Interpreted launchers (e.g. a Lutris installed as a Python entry point) show
-up in comm as the interpreter itself - "python3" - not "lutris". For those,
-fall back to matching the script/module basename in argv, e.g.
-"python3 /usr/bin/lutris" -> "lutris".
+/proc/<pid>/comm is truncated to 15 chars, same as `pgrep -x`. Interpreted
+launchers (e.g. a Python entry point) show up in comm as the interpreter,
+so those are matched against argv's script/module basename instead.
 """
 
 from __future__ import annotations
@@ -31,7 +26,7 @@ def is_launcher_running(name: str) -> bool:
         try:
             comm = (entry / "comm").read_text().strip()
         except OSError:
-            continue  # process exited between listing and read, or no permission
+            continue
         if comm == name:
             return True
         if comm.startswith("python") and _matches_cmdline(entry, name):

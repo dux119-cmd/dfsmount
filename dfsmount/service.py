@@ -1,18 +1,8 @@
-"""User-space service: keeps systemd user mount units in sync with a
-launcher's archived games.
+"""User-space service: syncs systemd user mount units with archived games.
 
-No socket, no fanotify, no root component, and no kernel autofs (see
-systemd_units.py for why). Every `poll_interval` seconds, this service:
-
-- adds unit files for newly-created archives, and removes them entirely
-  for archives that have been deleted
-- starts a target's overlay mount (bringing dwarfs up with it) while its
-  launcher is running
-- stops it the moment the launcher exits
-
-Mounting itself (`dfsmount mount`/`unmount` outside this service) still
-runs dwarfs/fuse-overlayfs directly - this service only ever manages unit
-files and calls systemctl.
+Every poll_interval seconds: adds unit files for new archives and removes
+them for deleted ones, then arms (starts) a target's overlay mount while
+its launcher is running and disarms (stops) it otherwise.
 """
 
 from __future__ import annotations
@@ -21,16 +11,18 @@ import time
 from dataclasses import dataclass, field
 
 from .archive import discover_targets, latest_archive
-from .config import LauncherConfig, ServiceConfig, require_executable
+from .config import require_executable
 from .launcher import is_launcher_running
-from .mount import TargetPaths
-from .systemd_units import owner_tag, render, unit_names
-from .unit_sync import (
+from .models import LauncherConfig, ServiceConfig, TargetPaths
+from .systemd import (
     daemon_reload,
     owned_units,
+    owner_tag,
     remove_units,
+    render,
     start_units,
     stop_units,
+    unit_names,
     write_units,
 )
 
@@ -50,7 +42,7 @@ def target_paths(launcher: LauncherConfig, target: str) -> TargetPaths:
 @dataclass
 class _LauncherState:
     targets: set[str] = field(default_factory=set)
-    armed: set[str] = field(default_factory=set)  # targets currently enabled
+    armed: set[str] = field(default_factory=set)
 
 
 def run(config: ServiceConfig) -> None:
@@ -85,8 +77,6 @@ def _reconcile_launcher(launcher: LauncherConfig, state: _LauncherState) -> None
 
 
 def _valid_owners(config: ServiceConfig) -> set[str]:
-    """owner tags for every (launcher, target) that currently has an
-    archive - i.e. everything _add_target would (re)create units for."""
     return {
         owner_tag(launcher.name, target)
         for launcher in config.launchers
@@ -96,10 +86,6 @@ def _valid_owners(config: ServiceConfig) -> set[str]:
 
 
 def _purge_stale_units(config: ServiceConfig) -> None:
-    """Remove dfsmount-owned unit files left over from a launcher or
-    target that no longer exists (renamed launcher, deleted archive
-    directory, edited config, ...). Only touches units carrying our
-    `X-Dfsmount-Owner=` marker - never units dfsmount didn't create."""
     valid = _valid_owners(config)
     stale = [name for name, owner in owned_units().items() if owner not in valid]
     if not stale:
@@ -131,12 +117,10 @@ def _remove_target(launcher: LauncherConfig, target: str) -> None:
 
 
 def _arm_target(launcher: LauncherConfig, target: str) -> None:
-    names = unit_names(target_paths(launcher, target))
-    start_units([names.overlay_mount])
+    start_units([unit_names(target_paths(launcher, target)).overlay_mount])
     print(f"[dfsmount] {launcher.name}/{target}: mounted")
 
 
 def _disarm_target(launcher: LauncherConfig, target: str) -> None:
-    names = unit_names(target_paths(launcher, target))
-    stop_units([names.overlay_mount])
+    stop_units([unit_names(target_paths(launcher, target)).overlay_mount])
     print(f"[dfsmount] {launcher.name}/{target}: unmounted")

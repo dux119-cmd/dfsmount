@@ -1,38 +1,26 @@
 #!/usr/bin/env python3
-"""dfsmount pre_archive hook: capture a game's Lutris metadata, in place.
+"""dfsmount pre_archive hook: capture a game's Lutris metadata.
 
-Run by dfsmount as `builtin:hooks/lutris/prepack.py <source_dir>` right
-before source_dir is archived. It:
-
-1. Identifies which Lutris game lives at source_dir (matching pga.db rows
-   by their resolved install directory - dfsmount only gives us a path,
-   not a slug).
-2. Writes that game's db row, config, and artwork into a `lutris/` subdir
-   inside source_dir, with the install path swapped for a portable
-   placeholder - install.py reads this back after a later mount.
-3. Deletes the game-tree paths Lutris/Wine/Proton regenerate on their own
-   (shader caches, stale registry backups, extra dosdevices symlinks,
-   ...), so they're never archived in the first place.
-
-Exits 0 whether or not a matching Lutris game was found - a directory this
-launcher archives isn't guaranteed to be a Lutris game, and dfsmount's own
-create step shouldn't be blocked by that. It logs to stderr either way.
+Run as `builtin:hooks/lutris/prepack.py <source_dir>` before source_dir is
+archived. Writes a generic .metadata/ dir (see hooks/metadata.py) inside
+source_dir and deletes game-tree paths Lutris/Wine/Proton regenerate on
+their own. Exits 0 even if no matching Lutris game is found - not every
+archived directory is necessarily a Lutris game.
 """
 
 from __future__ import annotations
 
-import json
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _lutris_common import (  # noqa: E402
     DOSDEVICES_DIR,
     EXCLUDED_DATABASE_KEYS,
     EXCLUDED_GAME_PATHS,
-    GAME_ROOT_PLACEHOLDER,
     LutrisPaths,
     artwork_paths,
     connect,
@@ -40,71 +28,71 @@ from _lutris_common import (  # noqa: E402
     find_game_root,
     list_games,
     strip_config_keys,
-    strip_paths,
 )
+from metadata import GameMetadata, strip_root, write  # noqa: E402
 
 
 def find_slug_for_directory(paths: LutrisPaths, source_dir: Path) -> str | None:
-    """The slug of whichever pga.db game resolves to source_dir, if any."""
     with connect(paths.db_path) as connection:
         games = list_games(connection)
-
     for game in games:
         config_path = paths.games_config_dir / f"{game['configpath']}.yml"
         if not config_path.exists():
             continue
         config_text = config_path.read_text(encoding="utf-8")
-        game_root = find_game_root(
-            paths, config_text, game["slug"], game.get("directory")
-        )
-        if game_root is not None and game_root.resolve() == source_dir:
+        root = find_game_root(paths, config_text, game["slug"], game.get("directory"))
+        if root is not None and root.resolve() == source_dir:
             return game["slug"]
     return None
 
 
 def capture_metadata(paths: LutrisPaths, slug: str, source_dir: Path) -> Path:
     with connect(paths.db_path) as connection:
-        game_row = connection.execute(
-            "SELECT * FROM games WHERE slug = ?", (slug,)
-        ).fetchone()
-    game_row = dict(game_row)
+        row = dict(
+            connection.execute("SELECT * FROM games WHERE slug = ?", (slug,)).fetchone()
+        )
 
-    # Strip the installed_at numeric suffix from configpath, if present.
-    installed_at = game_row.get("installed_at")
-    configpath = game_row.get("configpath", "")
-    if installed_at and configpath:
-        dash_stamp = f"-{installed_at}"
-        if configpath.endswith(dash_stamp):
-            game_row["configpath"] = configpath[: -len(dash_stamp)]
+    config_path = paths.games_config_dir / f"{row['configpath']}.yml"
 
-    for key in EXCLUDED_DATABASE_KEYS:
-        game_row.pop(key, None)
+    # Drop the "-<installed_at>" suffix Lutris appends to configpath, so the
+    # stored value is portable (a fresh install gets its own timestamp).
+    installed_at, configpath = row.get("installed_at"), row.get("configpath", "")
+    if installed_at and configpath.endswith(f"-{installed_at}"):
+        row["configpath"] = configpath[: -len(f"-{installed_at}")]
 
-    config_path = paths.games_config_dir / f"{game_row['configpath']}.yml"
-    config_text = config_path.read_text(encoding="utf-8")
-    stripped_config = strip_config_keys(
-        config_text.replace(str(source_dir), GAME_ROOT_PLACEHOLDER)
+    config_text = strip_config_keys(
+        config_path.read_text(encoding="utf-8").replace(
+            str(source_dir), "{{GAME_ROOT}}"
+        )
     )
 
-    lutris_dir = source_dir / "lutris"
-    lutris_dir.mkdir(exist_ok=True)
-    (lutris_dir / "database.json").write_text(
-        json.dumps(strip_paths(game_row, source_dir), indent=2), encoding="utf-8"
+    name = row.pop("name", slug)
+    runner = row.pop("runner", None)
+    for key in EXCLUDED_DATABASE_KEYS | {"slug"}:
+        row.pop(key, None)
+
+    art_files = {
+        name: source
+        for name, stem in artwork_paths(paths, slug).items()
+        if (source := find_artwork(stem)) is not None
+    }
+
+    meta = GameMetadata(
+        launcher="lutris",
+        id=slug,
+        name=name,
+        runner=runner,
+        config_ext="yml",
+        config_text=config_text,
+        extra=strip_root(row, source_dir),
+        art={name: source.suffix.lstrip(".") for name, source in art_files.items()},
     )
-    (lutris_dir / "config.yml").write_text(stripped_config, encoding="utf-8")
-
-    for name, stem in artwork_paths(paths, slug).items():
-        source = find_artwork(stem)
-        if source is not None:
-            shutil.copyfile(source, lutris_dir / f"{name}{source.suffix}")
-
-    return lutris_dir
+    return write(source_dir, meta, art_files)
 
 
 def prune_excluded_paths(source_dir: Path) -> None:
     for excluded in EXCLUDED_GAME_PATHS:
         _remove(source_dir / excluded)
-
     dosdevices = source_dir / DOSDEVICES_DIR
     if dosdevices.is_dir():
         for entry in dosdevices.iterdir():
@@ -132,9 +120,9 @@ def main() -> int:
         print(f"prepack: no Lutris game found for {source_dir}", file=sys.stderr)
         return 0
 
-    lutris_dir = capture_metadata(paths, slug, source_dir)
+    metadata_dir = capture_metadata(paths, slug, source_dir)
     prune_excluded_paths(source_dir)
-    print(f"prepack: captured '{slug}' Lutris metadata into {lutris_dir}")
+    print(f"prepack: captured '{slug}' Lutris metadata into {metadata_dir}")
     return 0
 
 

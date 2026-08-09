@@ -1,26 +1,13 @@
-# Example dfsmount config. Default lookup path: ~/.config/dfsmount.yaml
-poll_interval: 2  # seconds between /proc scans and archive/unit reconciliation
-
-# `dfsmount service` is a plain user-space process: it watches for the
-# launcher below, and generates + arms systemd user automount units for
-# each of its archived games. No root, no fanotify.
+# Default lookup path: ~/.config/dfsmount.yaml
+poll_interval: 2
 
 launchers:
-  - name: launcherexec          # matched against /proc/<pid>/comm (15-char truncated)
-    archives_dir: /backups/game-archives    # "<target>-rev<N>.dfs" files live here
-    working_dir: .local/state/launcher # per-target ro/upper/work dirs
-    target_mount_dir: Games    # each target appears at <this>/<target>
+  - name: lutris                    # matched against /proc/<pid>/comm
+    archives_dir: /backups/game-archives   # "<target>-rev<N>.dfs" files
+    working_dir: .local/state/dfsmount/lutris  # per-target ro/upper/work dirs
+    target_mount_dir: Games/lutris         # each target mounts at <this>/<target>
 
-    # Optional, all omittable. Each value is a shell command (parsed like a
-    # shell command line), or a list of shell commands to run in sequence;
-    # the relevant path(s) are appended as extra arguments. Run under
-    # whichever user invoked dfsmount - never root. A failing hook is logged
-    # but does not block the archive operation it wraps.
-    # Paths can be absolute, start with "~", relative to the user's home
-    # dir, or start with "builtin:" for a hook script bundled with dfsmount
-    # (e.g. "builtin:hooks/lutris/prepack.sh").
     hooks:
-      pre_archive: .local/bin/before-pack.sh      # arg: source_dir
-      post_archive: .local/bin/after-pack.sh      # args: source_dir, archive_path
-      install: .local/bin/install-into-lutris.sh    # arg: mount_dir; `dfsmount install`
-      uninstall: .local/bin/remove-from-lutris.sh   # arg: mount_dir; `dfsmount uninstall`
+      pre_archive: builtin:hooks/lutris/prepack.py    # captures Lutris metadata
+      install: builtin:hooks/lutris/install.py        # registers with Lutris
+      uninstall: builtin:hooks/lutris/uninstall.py     # removes from Lutris

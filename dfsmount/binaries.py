@@ -1,15 +1,4 @@
-"""Fetch pre-built dwarfs binaries from GitHub releases and resolve them.
-
-dfsmount needs `mkdwarfs`, `dwarfs`, `dwarfsck`, and `dwarfsextract`. Rather than
-requiring these on the system PATH, `fetch_release` downloads the matching
-Linux release tarball from https://github.com/mhx/dwarfs/releases and unpacks
-its bin/ directory into BUNDLED_BIN_DIR/<version> (a subdir of this package).
-A "current" symlink there points at the active version; `dwarfs_executable`
-prefers it and falls back to PATH.
-
-Linux-only: only the "Linux-x86_64" and "Linux-aarch64" release assets exist,
-matching this project's scope.
-"""
+"""Fetch prebuilt dwarfs binaries from GitHub releases, or resolve from PATH."""
 
 from __future__ import annotations
 
@@ -32,7 +21,7 @@ DWARFS_EXECUTABLES = ("mkdwarfs", "dwarfs", "dwarfsck", "dwarfsextract")
 
 
 class BinaryFetchError(RuntimeError):
-    """Raised when a dwarfs release binary can't be found or fetched."""
+    pass
 
 
 def _dwarfs_arch() -> str:
@@ -47,17 +36,9 @@ def _dwarfs_arch() -> str:
 
 @lru_cache(maxsize=1)
 def latest_release_metadata() -> dict:
-    """GitHub's metadata for the latest dwarfs release.
-
-    Cached: only needs fetching once per run, and repeated `fetch_release()`
-    calls (e.g. one per executable) shouldn't each hit the network.
-    """
     request = urllib.request.Request(
         _RELEASES_API,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "dfsmount",
-        },
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "dfsmount"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -67,7 +48,6 @@ def latest_release_metadata() -> dict:
 
 
 def _release_asset(release: dict) -> tuple[str, str]:
-    """(download_url, version) for this arch's Linux tarball in `release`."""
     version = release.get("tag_name", "").removeprefix("v")
     arch = _dwarfs_arch()
     name = f"dwarfs-{version}-Linux-{arch}.tar.xz"
@@ -84,13 +64,11 @@ def _has_all_executables(version_dir: Path) -> bool:
 
 
 def _extract_bin_dir(archive_path: Path, dest: Path) -> None:
-    """Pull just bin/{mkdwarfs,dwarfs,dwarfsck,dwarfsextract} out of the
-    release tarball (which nests everything under a version-named top dir)."""
     dest.mkdir(parents=True, exist_ok=True)
     wanted = {f"bin/{name}" for name in DWARFS_EXECUTABLES}
     with tarfile.open(archive_path, mode="r:xz") as archive:
         for member in archive.getmembers():
-            relative = "/".join(member.name.split("/")[1:])  # strip top dir
+            relative = "/".join(member.name.split("/")[1:])
             if relative not in wanted or not member.isfile():
                 continue
             extracted = archive.extractfile(member)
@@ -102,11 +80,6 @@ def _extract_bin_dir(archive_path: Path, dest: Path) -> None:
 
 
 def fetch_release(force: bool = False) -> Path:
-    """Download and unpack the latest dwarfs release, returning its bin dir.
-
-    No-ops the download if that version is already unpacked, unless `force`.
-    Repoints the "current" symlink at it either way.
-    """
     url, version = _release_asset(latest_release_metadata())
     version_dir = BUNDLED_BIN_DIR / version
 
@@ -127,12 +100,6 @@ def fetch_release(force: bool = False) -> Path:
 
 @cache
 def dwarfs_executable(name: str) -> str:
-    """Path to run for a dwarfs release tool: bundled copy if fetched, else PATH.
-
-    Cached per name: resolution is stable for a run once fetched (or once
-    confirmed absent from both places), and this is called on every
-    mount/unmount/archive-create.
-    """
     if name not in DWARFS_EXECUTABLES:
         raise ValueError(f"not a dwarfs release executable: {name!r}")
 

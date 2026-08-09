@@ -1,36 +1,19 @@
-"""Lutris pga.db access, config parsing, and path-portability helpers.
+"""Lutris pga.db access and config/path parsing, shared by the lutris hooks.
 
-Shared by prepack.py (captures a game's Lutris metadata before it's
-archived) and install.py (restores that metadata after a mount). Not a
-package - each hook script adds this file's directory to sys.path and
-imports it directly, since dfsmount runs hook scripts as standalone
-subprocesses.
-
-Ported from lutris-porter.py, minus everything tarball/zstd-specific:
-dfsmount's own archive.py already makes the archive, so there's no export
-format to write or read here - just the Lutris side of things.
+Not a package - each hook script adds this file's directory to sys.path
+and imports it directly, since dfsmount runs hooks as standalone processes.
 """
 
 from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-class LutrisHookError(Exception):
-    """Raised for expected failures; callers print these and exit 1."""
-
-
-# --------------------------------------------------------------------------
-# Lutris on-disk layout
-# --------------------------------------------------------------------------
-
-GAME_ROOT_PLACEHOLDER = "{{LUTRIS_GAME_ROOT}}"
 ARTWORK_EXTENSIONS = ("png", "jpg")
 
 
@@ -57,11 +40,6 @@ class LutrisPaths:
 
 
 def artwork_paths(paths: LutrisPaths, slug: str) -> dict[str, Path]:
-    """Map each artwork name to its on-disk path stem (no extension).
-
-    There are exactly three artwork files, each named after the slug; the
-    actual file is whichever of stem.png / stem.jpg exists.
-    """
     return {
         "banner": paths.banners_dir / slug,
         "coverart": paths.coverart_dir / slug,
@@ -76,11 +54,6 @@ def find_artwork(stem: Path) -> Path | None:
     )
 
 
-# --------------------------------------------------------------------------
-# pga.db access -- plain dicts via sqlite3.Row, no ORM
-# --------------------------------------------------------------------------
-
-
 @contextmanager
 def connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(db_path)
@@ -92,15 +65,9 @@ def connect(db_path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def list_games(connection: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = connection.execute("SELECT * FROM games ORDER BY slug").fetchall()
-    return [dict(row) for row in rows]
-
-
-def find_game_by_slug(
-    connection: sqlite3.Connection, slug: str
-) -> dict[str, Any] | None:
-    row = connection.execute("SELECT * FROM games WHERE slug = ?", (slug,)).fetchone()
-    return dict(row) if row else None
+    return [
+        dict(row) for row in connection.execute("SELECT * FROM games ORDER BY slug")
+    ]
 
 
 def insert_game(connection: sqlite3.Connection, game: dict[str, Any]) -> int:
@@ -114,58 +81,31 @@ def insert_game(connection: sqlite3.Connection, game: dict[str, Any]) -> int:
     return cursor.lastrowid
 
 
-# --------------------------------------------------------------------------
-# Path portability -- swap the game's real install path for a placeholder
-# --------------------------------------------------------------------------
+def delete_game(connection: sqlite3.Connection, slug: str) -> None:
+    connection.execute("DELETE FROM games WHERE slug = ?", (slug,))
+    connection.commit()
 
 
-def map_strings(value: Any, transform: Callable[[str], str]) -> Any:
-    """Recursively rebuild value, applying transform to every string leaf."""
-    if isinstance(value, dict):
-        return {key: map_strings(item, transform) for key, item in value.items()}
-    if isinstance(value, list):
-        return [map_strings(item, transform) for item in value]
-    if isinstance(value, str):
-        return transform(value)
-    return value
-
-
-def strip_game_root(path: str, game_root: Path) -> str:
-    root = str(game_root)
-    if not path.startswith(root):
-        return path
-    remainder = path[len(root) :].lstrip("/")
-    return (
-        f"{GAME_ROOT_PLACEHOLDER}/{remainder}" if remainder else GAME_ROOT_PLACEHOLDER
-    )
-
-
-def restore_game_root(path: str, new_root: str) -> str:
-    return (
-        path.replace(GAME_ROOT_PLACEHOLDER, new_root)
-        if GAME_ROOT_PLACEHOLDER in path
-        else path
-    )
-
-
-def strip_paths(data: Any, game_root: Path) -> Any:
-    return map_strings(data, lambda value: strip_game_root(value, game_root))
-
-
-def restore_paths(data: Any, new_root: str) -> Any:
-    return map_strings(data, lambda value: restore_game_root(value, new_root))
+def prepare_for_insert(
+    database: dict[str, Any], existing_id: int | None
+) -> dict[str, Any]:
+    result = {**database, "installed_at": int(time.time())}
+    if existing_id is not None:
+        result["id"] = existing_id
+    elif "id" in result:
+        del result["id"]
+    return result
 
 
 # --------------------------------------------------------------------------
-# Locating a game's install directory (for prepack: identifying which
-# Lutris game a source_dir belongs to)
-# --------------------------------------------------------------------------
-# Tried in order, most explicit first:
+# Locating a game's install directory, for prepack: identifying which
+# Lutris game a source_dir belongs to. Tried in order, most explicit first:
 #   1. config.yml's game.exe, if absolute and containing the slug as a
-#      path segment -- everything up to and including that segment
+#      path segment - everything up to and including that segment
 #   2. the database's `directory` column, if present
-#   3. config.yml's game.exe, if relative -- Lutris installed under its
-#      default games directory (system.yml's system.game_path) / slug
+#   3. config.yml's game.exe, if relative - resolved against
+#      system.yml's system.game_path / slug
+# --------------------------------------------------------------------------
 
 
 def find_game_root(
@@ -206,9 +146,7 @@ def _root_from_default_game_path(
     if not exe or exe.startswith("/"):
         return None
     default_game_path = _read_default_game_path(paths)
-    if not default_game_path:
-        return None
-    return f"{default_game_path.rstrip('/')}/{slug}"
+    return f"{default_game_path.rstrip('/')}/{slug}" if default_game_path else None
 
 
 def _read_default_game_path(paths: LutrisPaths) -> str | None:
@@ -224,8 +162,8 @@ def _read_default_game_path(paths: LutrisPaths) -> str | None:
 
 
 # --------------------------------------------------------------------------
-# Fields/keys dropped from the captured metadata, and game-tree paths
-# deleted outright rather than archived
+# Fields/keys dropped from captured metadata; game-tree paths deleted
+# outright (regenerated by Lutris/Wine/Proton) rather than archived
 # --------------------------------------------------------------------------
 
 EXCLUDED_DATABASE_KEYS = frozenset(
@@ -247,14 +185,7 @@ EXCLUDED_DATABASE_KEYS = frozenset(
     }
 )
 EXCLUDED_CONFIG_KEYS = frozenset(
-    {
-        "game_slug",
-        "name",
-        "script",
-        "service",
-        "service_id",
-        "slug",
-    }
+    {"game_slug", "name", "script", "service", "service_id", "slug"}
 )
 EXCLUDED_GAME_PATHS = frozenset(
     {
@@ -270,26 +201,13 @@ DOSDEVICES_DIR = "dosdevices"
 
 
 def strip_config_keys(text: str) -> str:
-    """Remove specified top-level YAML keys and their indented child lines."""
+    """Drop specified top-level YAML keys and their indented child lines."""
     result: list[str] = []
     skipping = False
     for line in text.splitlines(keepends=True):
         stripped = line.rstrip()
         if stripped and not stripped[0].isspace():
-            key = stripped.split(":", 1)[0]
-            skipping = key in EXCLUDED_CONFIG_KEYS
+            skipping = stripped.split(":", 1)[0] in EXCLUDED_CONFIG_KEYS
         if not skipping:
             result.append(line)
     return "".join(result)
-
-
-def prepare_for_insert(
-    database: dict[str, Any], existing_id: int | None
-) -> dict[str, Any]:
-    """Reset play stats and timestamps; reuse the existing DB id if any."""
-    result = {**database, "installed_at": int(time.time())}
-    if existing_id is not None:
-        result["id"] = existing_id
-    elif "id" in result:
-        del result["id"]
-    return result

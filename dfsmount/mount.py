@@ -1,34 +1,18 @@
-"""Mount dwarfs with fuse-overlayfs (writable) at the target path.
-
-Always runs as whichever user invokes it - the CLI directly, or the
-unprivileged user-mode service. Neither needs root.
-"""
+"""Mount dwarfs with a fuse-overlayfs writable layer on top."""
 
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass, field
-from pathlib import Path
 
 from .archive import latest_archive
 from .binaries import dwarfs_executable
-from .config import LauncherHooks, require_executable
+from .config import require_executable
+from .models import TargetPaths
 
 
-@dataclass(frozen=True)
-class TargetPaths:
-    target: str
-    archives_dir: Path
-    mount_dir: Path  # where the live, writable view appears
-    ro_mount: Path  # dwarfs read-only FUSE mount (overlay lowerdir)
-    upper: Path  # overlay upperdir
-    work: Path  # overlay workdir
-    hooks: LauncherHooks = field(default_factory=LauncherHooks)
-
-
-def is_mounted(path: Path) -> bool:
+def is_mounted(path) -> bool:
     return os.path.ismount(path)
 
 
@@ -47,8 +31,6 @@ def mount(paths: TargetPaths) -> None:
 
     for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
         directory.mkdir(parents=True, exist_ok=True)
-        # Guarantee traversal/access for the invoking user regardless of
-        # the process's current umask.
         directory.chmod(0o755)
 
     if not is_mounted(paths.ro_mount):
