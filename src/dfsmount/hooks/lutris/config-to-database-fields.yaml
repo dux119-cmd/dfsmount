@@ -1,0 +1,16 @@
+# Read by install.py: config.yml "game:" section key -> pga.db "games"
+# column. Add a line here and install.py copies that field into the new
+# pga.db row automatically - no code change needed.
+#
+# The field mapped to the db's "slug" column is treated as the game's
+# identity (install.py and remove.py use it to look the game up) - no
+# field name is hard-coded for that.
+#
+# Columns not listed here are computed by install.py itself rather than
+# read from config.yml (e.g. `directory`, `configpath`, `installed`,
+# `installed_at`), since they describe the local install, not the game.
+id: slug
+name: name
+runner: runner
+platform: platform
+year: year

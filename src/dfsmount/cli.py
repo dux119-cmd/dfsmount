@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from types import FrameType
 
-from . import archive, service
+from . import archive, bin_link, service
 from . import binaries as binaries_mod
 from . import hooks as hooks_mod
 from . import mount as mount_mod
@@ -33,6 +33,7 @@ LAUNCHER_FREE_COMMANDS = (
     "service-install",
     "service-remove",
     "fetch-binaries",
+    "install-bin",
 )
 ACTIONS = ("pack", "mount", "unmount", "repack", "status", "install", "remove")
 
@@ -104,8 +105,18 @@ def cmd_pack(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     print(f"moved {source} -> {archived_dir}")
 
 
-def cmd_service(config: ServiceConfig) -> None:
-    service.run(config)
+def cmd_service(config_path: Path) -> None:
+    service.run(config_path)
+
+
+def cmd_install_bin() -> None:
+    link = bin_link.install_symlink()
+    print(f"linked {link} -> {link.resolve()}")
+    if not bin_link.bin_dir_on_path():
+        print(
+            f"warning: {bin_link.BIN_DIR} is not on your PATH.\n"
+            '  add this to your shell profile: export PATH="$HOME/.local/bin:$PATH"'
+        )
 
 
 def cmd_mount(launcher: LauncherConfig, args: argparse.Namespace) -> None:
@@ -282,7 +293,14 @@ def _main(argv: list[str] | None) -> None:
         argparse.ArgumentParser(prog="dfsmount service", add_help=True).parse_args(
             rest[1:]
         )
-        cmd_service(load_config(config_path))
+        cmd_service(config_path)
+        return
+
+    if rest[0] == "install-bin":
+        argparse.ArgumentParser(prog="dfsmount install-bin", add_help=True).parse_args(
+            rest[1:]
+        )
+        cmd_install_bin()
         return
 
     if rest[0] in ("service-install", "service-remove"):

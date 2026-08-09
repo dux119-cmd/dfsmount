@@ -11,9 +11,10 @@ import shutil
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .archive import discover_targets, latest_archive
-from .config import require_executable
+from .config import load_config, require_executable
 from .launcher import is_launcher_running
 from .models import LauncherConfig, ServiceConfig, TargetPaths
 from .systemd import (
@@ -67,13 +68,51 @@ class _LauncherState:
     armed: set[str] = field(default_factory=set)
 
 
-def run(config: ServiceConfig) -> None:
+def _config_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _reload_if_changed(
+    path: Path,
+    last_mtime: float | None,
+    config: ServiceConfig,
+    state: dict[str, _LauncherState],
+) -> tuple[ServiceConfig, float | None, dict[str, _LauncherState]]:
+    mtime = _config_mtime(path)
+    if mtime == last_mtime:
+        return config, last_mtime, state
+
+    try:
+        config = load_config(path)
+    except Exception as exc:  # keep serving the old config on a bad edit
+        print(f"[dfsmount] config reload failed, keeping previous config: {exc}")
+        return config, mtime, state
+
+    state = {
+        launcher.name: state.get(launcher.name, _LauncherState())
+        for launcher in config.launchers
+    }
+    _purge_stale_units(config)
+    print(f"[dfsmount] reloaded config from {path}")
+    return config, mtime, state
+
+
+def run(config_path: Path) -> None:
     require_executable("systemctl")
     require_executable("systemd-escape")
 
+    config = load_config(config_path)
+    config_mtime = _config_mtime(config_path)
     _purge_stale_units(config)
     state = {launcher.name: _LauncherState() for launcher in config.launchers}
+
     while True:
+        config, config_mtime, state = _reload_if_changed(
+            config_path, config_mtime, config, state
+        )
         for launcher in config.launchers:
             _reconcile_launcher(launcher, state[launcher.name])
         time.sleep(config.poll_interval)

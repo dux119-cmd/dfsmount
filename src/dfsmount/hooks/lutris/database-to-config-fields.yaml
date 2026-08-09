@@ -1,0 +1,12 @@
+# Read by pack.py: pga.db "games" column -> config.yml "game:" section key.
+# Add a line here and pack.py copies that column into the archive's
+# config.yml automatically - no code change needed.
+#
+# Columns not listed here are left out of config.yml entirely (e.g.
+# `directory`, `configpath`, `installed`, `installed_at` - these describe
+# the local install, not the game, and are recomputed by install.py).
+slug: id
+name: name
+runner: runner
+platform: platform
+year: year

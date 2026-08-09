@@ -1,0 +1,11 @@
+# Read by pack.py (via strip_config_keys): top-level keys dropped from a
+# Lutris game's config.yml before it's captured into the archive. These
+# duplicate data already carried through database-to-config-fields.yaml
+# (game_slug/name/slug), or are launcher-internal bookkeeping (script/
+# service/service_id) that shouldn't be replayed on another machine.
+- game_slug
+- name
+- script
+- service
+- service_id
+- slug

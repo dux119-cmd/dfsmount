@@ -2,5 +2,5 @@
 # Run the dfsmount module in place, without installing the package.
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 exec env PYTHONPATH="${DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 -m dfsmount "$@"

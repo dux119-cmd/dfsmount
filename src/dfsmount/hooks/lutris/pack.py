@@ -2,11 +2,11 @@
 """dfsmount pack hook: capture a game's Lutris metadata.
 
 Run as `builtin:lutris/pack.py <source_dir>` before source_dir is archived.
-Writes id/name/runner/platform/year into the "game:" section of a portable
-.dfsmount/config.yml (plus .dfsmount/art/), and deletes game-tree paths
-Lutris/Wine/Proton regenerate on their own. Exits 0 even if no matching
-Lutris game is found - not every archived directory is necessarily a
-Lutris game.
+Writes the fields listed in database-to-config-fields.yaml into the
+"game:" section of a portable .dfsmount/config.yml (plus .dfsmount/art/),
+and deletes game-tree paths Lutris/Wine/Proton regenerate on their own.
+Exits 0 even if no matching Lutris game is found - not every archived
+directory is necessarily a Lutris game.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _lutris_common import (  # noqa: E402
     DOSDEVICES_DIR,
     EXCLUDED_GAME_PATHS,
-    GAME_SECTION_FIELDS,
     ROOT_PLACEHOLDER,
     LutrisPaths,
     artwork_paths,
@@ -31,6 +30,7 @@ from _lutris_common import (  # noqa: E402
     find_artwork,
     find_game_root,
     list_games,
+    load_database_to_config_fields,
     set_game_section_fields,
     strip_config_keys,
 )
@@ -62,9 +62,10 @@ def capture_config(paths: LutrisPaths, slug: str, source_dir: Path) -> Path:
         .replace(str(source_dir), ROOT_PLACEHOLDER)
     )
 
+    field_map = load_database_to_config_fields()
     fields = {
-        "id": slug,
-        **{k: str(row.get(k) or "") for k in GAME_SECTION_FIELDS[1:]},
+        yaml_field: str(row.get(db_column) or "")
+        for db_column, yaml_field in field_map.items()
     }
     config_text = set_game_section_fields(config_text, fields)
 

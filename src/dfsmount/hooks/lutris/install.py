@@ -2,11 +2,12 @@
 """dfsmount install hook: register an archived game with Lutris.
 
 Run as `builtin:lutris/install.py <mount_dir>` (via `dfsmount install`).
-Reads .dfsmount/config.yml's "game:" section (id/name/runner/platform/
-year), restores it to mount_dir, and writes the Lutris config, pga.db row,
-and artwork. `directory` is set from mount_dir and `configpath` from the
-slug; whatever art files are present under .dfsmount/art/ are installed
-as-is. Exits 0 if there's no captured metadata, or if the game is already
+Reads .dfsmount/config.yml's "game:" section (fields listed in
+config-to-database-fields.yaml), restores it to mount_dir, and writes the
+Lutris config, pga.db row, and artwork. `directory` is set from mount_dir
+and `configpath` from the identity field's value (normally the slug);
+whatever art files are present under .dfsmount/art/ are installed as-is.
+Exits 0 if there's no captured metadata, or if the game is already
 installed.
 """
 
@@ -22,11 +23,13 @@ from _lutris_common import (  # noqa: E402
     ROOT_PLACEHOLDER,
     LutrisPaths,
     artwork_paths,
+    config_identity_field,
     config_path,
     connect,
     dfsmount_config_path,
     find_dfsmount_art,
     insert_game,
+    load_config_to_database_fields,
     parse_game_section,
     prepare_for_insert,
 )
@@ -57,9 +60,11 @@ def main() -> int:
 
     config_text = captured.read_text(encoding="utf-8")
     fields = parse_game_section(config_text)
-    slug = fields.get("id")
+    field_map = load_config_to_database_fields()
+    identity_field = config_identity_field(field_map)
+    slug = fields.get(identity_field) if identity_field else None
     if not slug:
-        print(f"install: {captured} has no game.id, skipping", file=sys.stderr)
+        print(f"install: {captured} has no identity field, skipping", file=sys.stderr)
         return 0
 
     paths = LutrisPaths.for_home(Path.home())
@@ -83,15 +88,14 @@ def main() -> int:
     config_file_path.write_text(config_text, encoding="utf-8")
 
     database_row = {
-        "slug": slug,
-        "name": fields.get("name") or slug,
-        "runner": fields.get("runner") or None,
-        "platform": fields.get("platform") or None,
-        "year": fields.get("year") or None,
-        "directory": str(mount_dir),
-        "configpath": slug,
-        "installed": 1,
+        db_column: fields.get(yaml_field) or None
+        for yaml_field, db_column in field_map.items()
     }
+    database_row["name"] = database_row.get("name") or slug
+    # Not mapped: computed from the install itself, always hard-coded.
+    database_row["directory"] = str(mount_dir)
+    database_row["configpath"] = slug
+    database_row["installed"] = 1
 
     with connect(paths.db_path) as connection:
         insert_game(connection, prepare_for_insert(database_row, existing_id))

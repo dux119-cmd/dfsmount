@@ -14,17 +14,57 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 ARTWORK_EXTENSIONS = ("png", "jpg")
 
 # Where portable per-game data lives inside a source/mount directory.
 DFSMOUNT_DIR = ".dfsmount"
 CONFIG_FILENAME = "config.yml"
 ART_SUBDIR = "art"
-ROOT_PLACEHOLDER = "{{GAME_ROOT}}"
+ROOT_PLACEHOLDER = "DFSMOUNT_GAME_ROOT"
 
-# Fields round-tripped through config.yml's top-level "game:" section so an
-# archive stays self-describing without a separate game.json.
-GAME_SECTION_FIELDS = ("id", "name", "runner", "platform", "year")
+FIELD_MAP_DIR = Path(__file__).resolve().parent
+DATABASE_TO_CONFIG_FIELDS_PATH = FIELD_MAP_DIR / "database-to-config-fields.yaml"
+CONFIG_TO_DATABASE_FIELDS_PATH = FIELD_MAP_DIR / "config-to-database-fields.yaml"
+CONFIG_EXCLUSIONS_PATH = FIELD_MAP_DIR / "config-exclusions.yaml"
+
+# The db column both field maps treat as a game's identity - config.yml's
+# equivalent field is looked up dynamically, never assumed to be named "id".
+IDENTITY_COLUMN = "slug"
+
+
+def load_database_to_config_fields(
+    path: Path = DATABASE_TO_CONFIG_FIELDS_PATH,
+) -> dict[str, str]:
+    """pga.db column -> config.yml "game:" section key, for the pack hook."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def load_config_to_database_fields(
+    path: Path = CONFIG_TO_DATABASE_FIELDS_PATH,
+) -> dict[str, str]:
+    """config.yml "game:" section key -> pga.db column, for the install hook."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def load_config_exclusions(path: Path = CONFIG_EXCLUSIONS_PATH) -> frozenset[str]:
+    """Top-level config.yml keys stripped before archiving."""
+    return frozenset(yaml.safe_load(path.read_text(encoding="utf-8")) or [])
+
+
+def config_identity_field(
+    config_to_database_fields: dict[str, str], identity_column: str = IDENTITY_COLUMN
+) -> str | None:
+    """The config.yml field mapped to `identity_column` (normally "slug")."""
+    return next(
+        (
+            config_field
+            for config_field, db_column in config_to_database_fields.items()
+            if db_column == identity_column
+        ),
+        None,
+    )
 
 
 @dataclass(frozen=True)
@@ -130,69 +170,25 @@ def prepare_for_insert(
 # --------------------------------------------------------------------------
 # "game:" section round-trip: id/name/runner/platform/year live directly in
 # config.yml instead of a separate game.json, so the archive stays
-# self-contained. Line-based, not a full YAML parse, so hooks stay
-# dependency-free (they run under the system python3, not necessarily one
-# with PyYAML installed).
+# self-contained.
 # --------------------------------------------------------------------------
-
-
-def _quote_if_needed(value: str) -> str:
-    if value == "" or any(c in value for c in ":#{}[]&*!|>'\"%@`"):
-        return "'" + value.replace("'", "''") + "'"
-    return value
 
 
 def parse_game_section(config_text: str) -> dict[str, str]:
     """Read scalar key: value pairs from the top-level "game:" section."""
-    result: dict[str, str] = {}
-    in_game = False
-    for line in config_text.splitlines():
-        if line and not line[0].isspace():
-            in_game = line.rstrip().rstrip(":") == "game"
-            continue
-        if in_game and ":" in line:
-            key, _, value = line.strip().partition(":")
-            result[key.strip()] = value.strip().strip("'\"")
-    return result
+    data = yaml.safe_load(config_text) or {}
+    game = data.get("game") or {}
+    return {key: str(value) for key, value in game.items()}
 
 
 def set_game_section_fields(config_text: str, fields: dict[str, str]) -> str:
     """Add/replace scalar fields under the top-level "game:" section,
     creating the section if it doesn't exist."""
-    remaining = dict(fields)
-    out: list[str] = []
-    in_game = False
-    found_game = False
-
-    def flush() -> None:
-        for key, value in remaining.items():
-            out.append(f"  {key}: {_quote_if_needed(value)}\n")
-        remaining.clear()
-
-    for line in config_text.splitlines(keepends=True):
-        if line.strip() and not line[0].isspace():
-            if in_game:
-                flush()
-            in_game = line.rstrip().rstrip(":") == "game"
-            found_game = found_game or in_game
-            out.append(line)
-            continue
-        if in_game and ":" in line:
-            key = line.strip().split(":", 1)[0]
-            if key in remaining:
-                out.append(f"  {key}: {_quote_if_needed(remaining.pop(key))}\n")
-                continue
-        out.append(line)
-
-    if in_game:
-        flush()
-    if not found_game:
-        if out and not out[-1].endswith("\n"):
-            out.append("\n")
-        out.append("game:\n")
-        for key, value in fields.items():
-            out.append(f"  {key}: {_quote_if_needed(value)}\n")
-    return "".join(out)
+    data = yaml.safe_load(config_text) or {}
+    game = dict(data.get("game") or {})
+    game.update(fields)
+    data["game"] = game
+    return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
 
 
 # --------------------------------------------------------------------------
@@ -218,13 +214,10 @@ def find_game_root(
 
 
 def _exe_path(config_text: str) -> str | None:
-    for line in config_text.splitlines():
-        if "exe:" in line:
-            _, _, value = line.partition("exe:")
-            value = value.strip().strip("'\"")
-            if value:
-                return value
-    return None
+    data = yaml.safe_load(config_text) or {}
+    game = data.get("game") or {}
+    exe = game.get("exe")
+    return str(exe) if exe else None
 
 
 def _root_from_absolute_exe(config_text: str, slug: str) -> str | None:
@@ -250,13 +243,9 @@ def _root_from_default_game_path(
 def _read_default_game_path(paths: LutrisPaths) -> str | None:
     if not paths.system_yml_path.exists():
         return None
-    for line in paths.system_yml_path.read_text(encoding="utf-8").splitlines():
-        if "game_path:" in line:
-            _, _, value = line.partition("game_path:")
-            value = value.strip().strip("'\"")
-            if value:
-                return value
-    return None
+    data = yaml.safe_load(paths.system_yml_path.read_text(encoding="utf-8")) or {}
+    game_path = data.get("game_path") or (data.get("system") or {}).get("game_path")
+    return str(game_path) if game_path else None
 
 
 # --------------------------------------------------------------------------
@@ -264,9 +253,6 @@ def _read_default_game_path(paths: LutrisPaths) -> str | None:
 # outright (regenerated by Lutris/Wine/Proton) rather than archived
 # --------------------------------------------------------------------------
 
-EXCLUDED_CONFIG_KEYS = frozenset(
-    {"game_slug", "name", "script", "service", "service_id", "slug"}
-)
 EXCLUDED_GAME_PATHS = frozenset(
     {
         "config_info",
@@ -280,14 +266,10 @@ EXCLUDED_GAME_PATHS = frozenset(
 DOSDEVICES_DIR = "dosdevices"
 
 
-def strip_config_keys(text: str) -> str:
-    """Drop specified top-level YAML keys and their indented child lines."""
-    result: list[str] = []
-    skipping = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.rstrip()
-        if stripped and not stripped[0].isspace():
-            skipping = stripped.split(":", 1)[0] in EXCLUDED_CONFIG_KEYS
-        if not skipping:
-            result.append(line)
-    return "".join(result)
+def strip_config_keys(text: str, excluded_keys: frozenset[str] | None = None) -> str:
+    """Drop top-level YAML keys listed in config-exclusions.yaml."""
+    excluded = load_config_exclusions() if excluded_keys is None else excluded_keys
+    data = yaml.safe_load(text) or {}
+    for key in excluded:
+        data.pop(key, None)
+    return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)

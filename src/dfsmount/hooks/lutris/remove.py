@@ -16,19 +16,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _lutris_common import (  # noqa: E402
+    ARTWORK_EXTENSIONS,
     LutrisPaths,
     artwork_paths,
+    config_identity_field,
     config_path,
     connect,
     delete_game,
     dfsmount_config_path,
+    load_config_to_database_fields,
     parse_game_section,
 )
 
 
 def remove_artwork(paths: LutrisPaths, slug: str) -> None:
     for stem in artwork_paths(paths, slug).values():
-        for ext in ("png", "jpg"):
+        for ext in ARTWORK_EXTENSIONS:
             Path(f"{stem}.{ext}").unlink(missing_ok=True)
 
 
@@ -45,9 +48,14 @@ def main() -> int:
         )
         return 0
 
-    slug = parse_game_section(captured.read_text(encoding="utf-8")).get("id")
+    identity_field = config_identity_field(load_config_to_database_fields())
+    slug = (
+        parse_game_section(captured.read_text(encoding="utf-8")).get(identity_field)
+        if identity_field
+        else None
+    )
     if not slug:
-        print(f"remove: {captured} has no game.id, skipping", file=sys.stderr)
+        print(f"remove: {captured} has no identity field, skipping", file=sys.stderr)
         return 0
 
     paths = LutrisPaths.for_home(Path.home())
