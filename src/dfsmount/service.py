@@ -2,7 +2,9 @@
 
 Every poll_interval seconds: adds unit files for new archives and removes
 them for deleted ones, then arms (starts) a target's overlay mount while
-its launcher is running and disarms (stops) it otherwise.
+its launcher is running and disarms (stops) it otherwise. When a target is
+visible to more than one launcher (a shared archives_dir), only one running
+launcher may arm it at a time - see `_resolve_owners`.
 """
 
 from __future__ import annotations
@@ -113,12 +115,36 @@ def run(config_path: Path) -> None:
         config, config_mtime, state = _reload_if_changed(
             config_path, config_mtime, config, state
         )
+        owners = _resolve_owners(config)
         for launcher in config.launchers:
-            _reconcile_launcher(launcher, state[launcher.name])
+            _reconcile_launcher(launcher, state[launcher.name], owners)
         time.sleep(config.poll_interval)
 
 
-def _reconcile_launcher(launcher: LauncherConfig, state: _LauncherState) -> None:
+def _resolve_owners(config: ServiceConfig) -> dict[tuple[Path, str], str]:
+    """(archives_dir, target) -> the one running launcher allowed to arm it.
+
+    The same archives_dir (and therefore the same target names) can be
+    shared by more than one launcher config. Only one launcher may hold a
+    given target's writable mount at a time - mounting it twice would give
+    it two independent, diverging overlays. Among the launchers currently
+    running that see this target, the first one in config order trumps;
+    the rest stay dormant for it until they run and the target is free.
+    """
+    owners: dict[tuple[Path, str], str] = {}
+    for launcher in config.launchers:
+        if not is_launcher_running(launcher.name):
+            continue
+        for target in discover_targets(launcher.archives_dir):
+            owners.setdefault((launcher.archives_dir, target), launcher.name)
+    return owners
+
+
+def _reconcile_launcher(
+    launcher: LauncherConfig,
+    state: _LauncherState,
+    owners: dict[tuple[Path, str], str],
+) -> None:
     current = discover_targets(launcher.archives_dir)
     running = is_launcher_running(launcher.name)
 
@@ -129,7 +155,14 @@ def _reconcile_launcher(launcher: LauncherConfig, state: _LauncherState) -> None
         state.armed.discard(target)
     state.targets = current
 
-    desired_armed = current if running else set()
+    if running:
+        desired_armed = {
+            target
+            for target in current
+            if owners.get((launcher.archives_dir, target)) == launcher.name
+        }
+    else:
+        desired_armed = set()
     for target in desired_armed - state.armed:
         _arm_target(launcher, target)
     for target in state.armed - desired_armed:

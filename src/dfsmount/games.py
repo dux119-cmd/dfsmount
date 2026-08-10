@@ -29,6 +29,17 @@ def list_games(launcher: LauncherConfig) -> list[GameStatus]:
     return [GameStatus(name=n, repackable=repackable(n)) for n in names]
 
 
+def list_packable(launcher: LauncherConfig) -> list[str]:
+    """Game dirs eligible for `pack`: not already archived-aside, not mounted."""
+    if not launcher.target_mount_dir.is_dir():
+        return []
+    return sorted(
+        e.name
+        for e in launcher.target_mount_dir.iterdir()
+        if e.is_dir() and not e.name.endswith("-archived") and not is_mounted(e)
+    )
+
+
 def list_mounted(launcher: LauncherConfig) -> list[str]:
     if not launcher.target_mount_dir.is_dir():
         return []

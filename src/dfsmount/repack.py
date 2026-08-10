@@ -18,7 +18,6 @@ def repack(paths: TargetPaths) -> Path:
 
     unmount(paths)
     reset_overlay(paths)
-    if was_mounted:
-        mount(paths)
+    mount(paths)
 
     return output
