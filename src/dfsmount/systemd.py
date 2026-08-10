@@ -56,9 +56,8 @@ def unit_names(paths: TargetPaths) -> TargetUnits:
 def _dwarfs_mount_command(paths: TargetPaths, pack_path: Path) -> str:
     dwarfs = dwarfs_executable("dwarfs")
     return (
-        f"{dwarfs} -o uid={os.getuid()} -o gid={os.getgid()} "
-        f"-o workers={os.cpu_count() or 1} -o block_allocator=mmap "
-        f"-o cachesize=2048M -o readahead=512K {pack_path} {paths.ro_mount}"
+        f"{dwarfs} -o workers={os.cpu_count() or 1} -o block_allocator=mmap "
+        f"-o readahead=512K {pack_path} {paths.ro_mount}"
     )
 
 
