@@ -5,15 +5,20 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
-from .archive import latest_archive
 from .binaries import dwarfs_executable
 from .config import require_executable
 from .models import TargetPaths
+from .pack import latest_pack
 
 
-def is_mounted(path) -> bool:
+def is_mounted(path: Path) -> bool:
     return os.path.ismount(path)
+
+
+def has_overlay_content(overlay_dir: Path) -> bool:
+    return overlay_dir.is_dir() and any(overlay_dir.iterdir())
 
 
 def mount(paths: TargetPaths) -> None:
@@ -23,10 +28,10 @@ def mount(paths: TargetPaths) -> None:
     if is_mounted(paths.mount_dir):
         return
 
-    archive = latest_archive(paths)
-    if archive is None:
+    pack_file = latest_pack(paths)
+    if pack_file is None:
         raise FileNotFoundError(
-            f"no archive found for target {paths.target!r} in {paths.archives_dir}"
+            f"no pack found for target {paths.target!r} in {paths.archives_dir}"
         )
 
     for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
@@ -49,7 +54,7 @@ def mount(paths: TargetPaths) -> None:
                 "cachesize=2048M",
                 "-o",
                 "readahead=512K",
-                str(archive),
+                str(pack_file),
                 str(paths.ro_mount),
             ],
             check=True,
@@ -69,13 +74,30 @@ def mount(paths: TargetPaths) -> None:
 def unmount(paths: TargetPaths) -> None:
     require_executable("umount")
 
-    if not is_mounted(paths.mount_dir) and not is_mounted(paths.ro_mount):
-        return
-
     if is_mounted(paths.mount_dir):
         subprocess.run(["umount", str(paths.mount_dir)], check=True)
     if is_mounted(paths.ro_mount):
         subprocess.run(["umount", str(paths.ro_mount)], check=True)
+
+    _remove_empty_mount_dir(paths)
+    _remove_overlay_tree_if_empty(paths)
+
+
+def _remove_empty_mount_dir(paths: TargetPaths) -> None:
+    """Drop the now-unused mount point dir, once confirmed unmounted and empty."""
+    if is_mounted(paths.mount_dir) or not paths.mount_dir.is_dir():
+        return
+    if any(paths.mount_dir.iterdir()):
+        return
+    paths.mount_dir.rmdir()
+
+
+def _remove_overlay_tree_if_empty(paths: TargetPaths) -> None:
+    """Drop the overlay working tree (ro/upper/work) if it has no unsaved changes."""
+    overlay_root = paths.upper.parent
+    if has_overlay_content(paths.upper) or not overlay_root.is_dir():
+        return
+    shutil.rmtree(overlay_root, ignore_errors=True)
 
 
 def reset_overlay(paths: TargetPaths) -> None:

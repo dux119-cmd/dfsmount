@@ -21,10 +21,11 @@ import sys
 from pathlib import Path
 from types import FrameType
 
-from . import archive, bin_link, service
+from . import bin_link, service
 from . import binaries as binaries_mod
 from . import hooks as hooks_mod
 from . import mount as mount_mod
+from . import pack as pack_mod
 from . import repack as repack_mod
 from .config import (
     default_config_path,
@@ -32,7 +33,7 @@ from .config import (
     load_config,
     resolve_user_path,
 )
-from .games import list_games, list_mounted, list_packable
+from .games import list_mountable, list_mounted, list_packable, list_repackable
 from .models import LauncherConfig, ServiceConfig, TargetPaths
 
 # One-time setup: install/remove the background service, fetch the dwarfs
@@ -45,9 +46,9 @@ SETUP_COMMANDS = (
 )
 LAUNCHER_FREE_COMMANDS = ("service", *SETUP_COMMANDS)
 
-# Packs: create, refresh, and (un)apply archived game content.
+# Packs: create, refresh, and (un)apply packed game content.
 PACK_ACTIONS = ("pack", "repack", "install", "remove")
-# Mounts: bring archived content on/offline and inspect its state. The
+# Mounts: bring packed content on/offline and inspect its state. The
 # background `service` performs the mount/unmount half of this group
 # automatically; these actions are for doing it by hand.
 MOUNT_ACTIONS = ("mount", "unmount", "status")
@@ -69,8 +70,8 @@ def _list_packable(launcher: LauncherConfig) -> None:
 
 
 def _list_available(launcher: LauncherConfig) -> None:
-    names = sorted(archive.discover_targets(launcher.archives_dir))
-    _print_names(names, f"no archives found in {launcher.archives_dir}")
+    names = list_mountable(launcher)
+    _print_names(names, f"no packs found in {launcher.archives_dir}")
 
 
 def _list_mounted(launcher: LauncherConfig) -> None:
@@ -80,26 +81,33 @@ def _list_mounted(launcher: LauncherConfig) -> None:
 
 
 def _list_repackable(launcher: LauncherConfig) -> None:
-    names = sorted(game.name for game in list_games(launcher) if game.repackable)
+    names = list_repackable(launcher)
     _print_names(names, f"nothing repackable for {launcher.name}")
 
 
+# Priority order for a game's headline status: the most "active"/actionable
+# state wins when a game qualifies for more than one (e.g. a mounted game
+# with a pack available is reported as "mounted", not "mountable").
+_STATUS_PRIORITY = ("mounted", "repackable", "mountable", "packable")
+
+
 def _list_status(launcher: LauncherConfig) -> None:
-    games = list_games(launcher)
-    if not games:
+    # Reuse each action's own listing so status can never drift from what
+    # `pack`/`repack`/`mount` would actually do for a given game.
+    by_state = {
+        "mounted": set(list_mounted(launcher)),
+        "repackable": set(list_repackable(launcher)),
+        "mountable": set(list_mountable(launcher)),
+        "packable": set(list_packable(launcher)),
+    }
+    names = sorted(set.union(*by_state.values()))
+    if not names:
         print(f"no targets found for {launcher.name}")
         return
-    for game in games:
-        paths = TargetPaths.for_target(launcher, game.name)
-        if mount_mod.is_mounted(paths.mount_dir):
-            state = "mounted"
-        elif game.repackable:
-            state = "repackable"
-        elif archive.latest_archive(paths) is not None:
-            state = "mountable"
-        else:
-            state = "archiveable"
-        print(f"{game.name}: {state}")
+
+    for name in names:
+        state = next(label for label in _STATUS_PRIORITY if name in by_state[label])
+        print(f"{name}: {state}")
 
 
 def cmd_pack(launcher: LauncherConfig, args: argparse.Namespace) -> None:
@@ -114,12 +122,12 @@ def cmd_pack(launcher: LauncherConfig, args: argparse.Namespace) -> None:
     else:
         source = launcher.target_mount_dir / args.source
 
-    target = archive.target_from_source(source)
+    target = pack_mod.target_from_source(source)
     paths = TargetPaths.for_target(launcher, target)
-    output = archive.create_archive(paths, source)
-    archived_dir = archive.archive_source_dir(source)
+    output = pack_mod.create_pack(paths, source)
+    packed_dir = pack_mod.pack_source_dir(source)
     print(f"created {output} (target: {target})")
-    print(f"moved {source} -> {archived_dir}")
+    print(f"moved {source} -> {packed_dir}")
 
 
 def cmd_service(config_path: Path) -> None:
@@ -169,14 +177,14 @@ def cmd_status(launcher: LauncherConfig, args: argparse.Namespace) -> None:
         return
     paths = TargetPaths.for_target(launcher, args.target)
     state = "mounted" if mount_mod.is_mounted(paths.mount_dir) else "not mounted"
-    latest = archive.latest_archive(paths)
+    latest = pack_mod.latest_pack(paths)
     print(f"{paths.mount_dir}: {state}")
-    print(f"  latest archive: {latest}")
+    print(f"  latest pack: {latest}")
 
 
 def _install_targets(launcher: LauncherConfig, target: str) -> list[str]:
     if target == "all":
-        return sorted(archive.discover_targets(launcher.archives_dir))
+        return list_mountable(launcher)
     return [target]
 
 
@@ -244,12 +252,12 @@ def _resolve_launcher(
 
 
 _ACTION_HELP = {
-    "mount": "game; omit to list available archives",
+    "mount": "game; omit to list mountable packs",
     "unmount": "game; omit to list mounted targets",
     "repack": "game; omit to list repackable targets",
-    "status": "name; omit to list archiveable/repackable/mountable/mounted state",
-    "install": "name, or 'all'; omit to list available archives",
-    "remove": "name, or 'all'; omit to list available archives",
+    "status": "name; omit to list packable/repackable/mountable/mounted state",
+    "install": "name, or 'all'; omit to list mountable packs",
+    "remove": "name, or 'all'; omit to list mountable packs",
 }
 _ACTION_HANDLERS = {
     "mount": cmd_mount,
@@ -270,7 +278,7 @@ def _dispatch_launcher_command(
             "source",
             nargs="?",
             default=None,
-            help="directory to archive; omit to list packable game names",
+            help="directory to pack; omit to list packable game names",
         )
         cmd_pack(launcher, p.parse_args(action_args))
         return

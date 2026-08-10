@@ -1,12 +1,12 @@
-"""Write a new archive revision from a target's live (mounted) state."""
+"""Write a new pack revision from a target's live (mounted) state."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .archive import create_archive
 from .models import TargetPaths
 from .mount import is_mounted, mount, reset_overlay, unmount
+from .pack import create_pack
 
 
 def repack(paths: TargetPaths) -> Path:
@@ -14,7 +14,7 @@ def repack(paths: TargetPaths) -> Path:
     if not was_mounted:
         mount(paths)
 
-    output = create_archive(paths, paths.mount_dir)
+    output = create_pack(paths, paths.mount_dir)
 
     unmount(paths)
     reset_overlay(paths)

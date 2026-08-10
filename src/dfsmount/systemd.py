@@ -1,4 +1,4 @@
-"""Render and control the systemd user units for one archived target.
+"""Render and control the systemd user units for one packed target.
 
 Both dwarfs and the overlay are plain oneshot units, started/stopped
 explicitly by user_service.py, rather than kernel autofs `.automount`
@@ -53,16 +53,16 @@ def unit_names(paths: TargetPaths) -> TargetUnits:
     )
 
 
-def _dwarfs_mount_command(paths: TargetPaths, archive: Path) -> str:
+def _dwarfs_mount_command(paths: TargetPaths, pack_path: Path) -> str:
     dwarfs = dwarfs_executable("dwarfs")
     return (
         f"{dwarfs} -o uid={os.getuid()} -o gid={os.getgid()} "
         f"-o workers={os.cpu_count() or 1} -o block_allocator=mmap "
-        f"-o cachesize=2048M -o readahead=512K {archive} {paths.ro_mount}"
+        f"-o cachesize=2048M -o readahead=512K {pack_path} {paths.ro_mount}"
     )
 
 
-def _dwarfs_service_unit(paths: TargetPaths, archive: Path, owner: str) -> str:
+def _dwarfs_service_unit(paths: TargetPaths, pack_path: Path, owner: str) -> str:
     umount = shutil.which("umount") or "umount"
     return (
         "[Unit]\n"
@@ -72,7 +72,7 @@ def _dwarfs_service_unit(paths: TargetPaths, archive: Path, owner: str) -> str:
         "[Service]\n"
         "Type=oneshot\n"
         "RemainAfterExit=yes\n"
-        f"ExecStart={_dwarfs_mount_command(paths, archive)}\n"
+        f"ExecStart={_dwarfs_mount_command(paths, pack_path)}\n"
         f"ExecStop={umount} {paths.ro_mount}\n"
     )
 
@@ -93,12 +93,12 @@ def _overlay_mount_unit(paths: TargetPaths, dwarfs_service: str, owner: str) -> 
     )
 
 
-def render(paths: TargetPaths, archive: Path, launcher: str) -> dict[str, str]:
+def render(paths: TargetPaths, pack_path: Path, launcher: str) -> dict[str, str]:
     """unit filename -> file content, for both units of one target."""
     names = unit_names(paths)
     owner = owner_tag(launcher, paths.target)
     return {
-        names.dwarfs_service: _dwarfs_service_unit(paths, archive, owner),
+        names.dwarfs_service: _dwarfs_service_unit(paths, pack_path, owner),
         names.overlay_mount: _overlay_mount_unit(paths, names.dwarfs_service, owner),
     }
 

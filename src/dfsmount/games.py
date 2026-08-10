@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .archive import discover_targets, latest_archive
 from .models import GameStatus, LauncherConfig, TargetPaths
-from .mount import is_mounted
-
-
-def _has_overlay_content(overlay_dir: Path) -> bool:
-    return overlay_dir.is_dir() and any(overlay_dir.iterdir())
+from .mount import has_overlay_content, is_mounted
+from .pack import discover_targets, latest_pack
 
 
 def list_games(launcher: LauncherConfig) -> list[GameStatus]:
@@ -23,21 +19,35 @@ def list_games(launcher: LauncherConfig) -> list[GameStatus]:
 
     def repackable(name: str) -> bool:
         paths = TargetPaths.for_target(launcher, name)
-        has_archive = latest_archive(paths) is not None
-        return has_archive and _has_overlay_content(paths.upper)
+        has_pack = latest_pack(paths) is not None
+        return has_pack and has_overlay_content(paths.upper)
 
     return [GameStatus(name=n, repackable=repackable(n)) for n in names]
 
 
+def list_repackable(launcher: LauncherConfig) -> list[str]:
+    return sorted(game.name for game in list_games(launcher) if game.repackable)
+
+
+def list_mountable(launcher: LauncherConfig) -> list[str]:
+    """Targets with a pack available to mount (reuses `mount`'s own listing)."""
+    return sorted(discover_targets(launcher.archives_dir))
+
+
 def list_packable(launcher: LauncherConfig) -> list[str]:
-    """Game dirs eligible for `pack`: not already archived-aside, not mounted."""
+    """Game dirs eligible for `pack`: non-empty, no overlay, and not -archived"""
     if not launcher.target_mount_dir.is_dir():
         return []
-    return sorted(
-        e.name
-        for e in launcher.target_mount_dir.iterdir()
-        if e.is_dir() and not e.name.endswith("-archived") and not is_mounted(e)
-    )
+
+    def packable(entry: Path) -> bool:
+        if not entry.is_dir() or entry.name.endswith("-archived"):
+            return False
+        if not any(entry.iterdir()):
+            return False
+        paths = TargetPaths.for_target(launcher, entry.name)
+        return not has_overlay_content(paths.upper)
+
+    return sorted(e.name for e in launcher.target_mount_dir.iterdir() if packable(e))
 
 
 def list_mounted(launcher: LauncherConfig) -> list[str]:

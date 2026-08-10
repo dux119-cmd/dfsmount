@@ -15,10 +15,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .archive import discover_targets, latest_archive
 from .config import load_config, require_executable
 from .launcher import is_launcher_running
 from .models import LauncherConfig, ServiceConfig, TargetPaths
+from .pack import discover_targets, latest_pack
 from .systemd import (
     UNIT_DIR,
     daemon_reload,
@@ -175,7 +175,7 @@ def _valid_owners(config: ServiceConfig) -> set[str]:
         owner_tag(launcher.name, target)
         for launcher in config.launchers
         for target in discover_targets(launcher.archives_dir)
-        if latest_archive(TargetPaths.for_target(launcher, target)) is not None
+        if latest_pack(TargetPaths.for_target(launcher, target)) is not None
     }
 
 
@@ -192,13 +192,13 @@ def _purge_stale_units(config: ServiceConfig) -> None:
 
 def _add_target(launcher: LauncherConfig, target: str) -> None:
     paths = TargetPaths.for_target(launcher, target)
-    archive = latest_archive(paths)
-    if archive is None:
+    pack_file = latest_pack(paths)
+    if pack_file is None:
         return
     for directory in (paths.ro_mount, paths.upper, paths.work, paths.mount_dir):
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o755)
-    write_units(render(paths, archive, launcher.name))
+    write_units(render(paths, pack_file, launcher.name))
     daemon_reload()
     print(f"[dfsmount] {launcher.name}/{target}: registered mount units")
 
