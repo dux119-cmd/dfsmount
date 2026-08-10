@@ -18,6 +18,7 @@ from pathlib import Path
 from .config import load_config, require_executable
 from .launcher import is_launcher_running
 from .models import LauncherConfig, ServiceConfig, TargetPaths
+from .mount import cleanup_unmounted
 from .pack import discover_targets, latest_pack
 from .systemd import (
     UNIT_DIR,
@@ -204,9 +205,10 @@ def _add_target(launcher: LauncherConfig, target: str) -> None:
 
 
 def _remove_target(launcher: LauncherConfig, target: str) -> None:
-    names = unit_names(TargetPaths.for_target(launcher, target))
-    remove_units(names.all_names())
+    paths = TargetPaths.for_target(launcher, target)
+    remove_units(unit_names(paths).all_names())
     daemon_reload()
+    cleanup_unmounted(paths)
     print(f"[dfsmount] {launcher.name}/{target}: removed mount units")
 
 
@@ -216,5 +218,7 @@ def _arm_target(launcher: LauncherConfig, target: str) -> None:
 
 
 def _disarm_target(launcher: LauncherConfig, target: str) -> None:
-    stop_units([unit_names(TargetPaths.for_target(launcher, target)).overlay_mount])
+    paths = TargetPaths.for_target(launcher, target)
+    stop_units([unit_names(paths).overlay_mount])
+    cleanup_unmounted(paths)
     print(f"[dfsmount] {launcher.name}/{target}: unmounted")

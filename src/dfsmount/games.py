@@ -35,7 +35,7 @@ def list_mountable(launcher: LauncherConfig) -> list[str]:
 
 
 def list_packable(launcher: LauncherConfig) -> list[str]:
-    """Game dirs eligible for `pack`: non-empty, no overlay, and not -archived"""
+    """Game dirs eligible for `pack`: non-empty, no overlay content, not archived."""
     if not launcher.target_mount_dir.is_dir():
         return []
 

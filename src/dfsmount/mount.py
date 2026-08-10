@@ -79,6 +79,16 @@ def unmount(paths: TargetPaths) -> None:
     if is_mounted(paths.ro_mount):
         subprocess.run(["umount", str(paths.ro_mount)], check=True)
 
+    cleanup_unmounted(paths)
+
+
+def cleanup_unmounted(paths: TargetPaths) -> None:
+    """Purge a target's empty mount point and overlay tree, once unmounted.
+
+    Safe to call any time a target might be unmounted (e.g. after the
+    service stops its systemd units) - each check confirms the relevant
+    directory is both unmounted and empty before removing it.
+    """
     _remove_empty_mount_dir(paths)
     _remove_overlay_tree_if_empty(paths)
 
@@ -95,6 +105,8 @@ def _remove_empty_mount_dir(paths: TargetPaths) -> None:
 def _remove_overlay_tree_if_empty(paths: TargetPaths) -> None:
     """Drop the overlay working tree (ro/upper/work) if it has no unsaved changes."""
     overlay_root = paths.upper.parent
+    if is_mounted(paths.ro_mount):
+        return
     if has_overlay_content(paths.upper) or not overlay_root.is_dir():
         return
     shutil.rmtree(overlay_root, ignore_errors=True)
