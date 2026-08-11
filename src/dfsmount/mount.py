@@ -47,7 +47,7 @@ def mount(paths: TargetPaths) -> None:
                 "-o",
                 "block_allocator=mmap",
                 "-o",
-                "readahead=512K",
+                "readahead=8M",
                 str(pack_file),
                 str(paths.ro_mount),
             ],

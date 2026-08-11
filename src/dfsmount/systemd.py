@@ -57,7 +57,7 @@ def _dwarfs_mount_command(paths: TargetPaths, pack_path: Path) -> str:
     dwarfs = dwarfs_executable("dwarfs")
     return (
         f"{dwarfs} -o workers={os.cpu_count() or 1} -o block_allocator=mmap "
-        f"-o readahead=512K {pack_path} {paths.ro_mount}"
+        f"-o readahead=8M {pack_path} {paths.ro_mount}"
     )
 
 

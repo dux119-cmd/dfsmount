@@ -79,8 +79,11 @@ def create_pack(paths: TargetPaths, source_dir: Path) -> Path:
         "--force",
         "--progress=simple",
         "--categorize",
-        "--compress-level=9",
-        "--compression=zstd:level=6:wlog=30:strat=3",
+        "--no-history",
+        "--max-lookback-blocks=2",
+        "--window-step=5",
+        "--bloom-filter-size=5",
+        "--compression=zstd:level=12:wlog=30:strat=3",
         f"--input={source_dir}",
         f"--output={temp_output}",
     ]
