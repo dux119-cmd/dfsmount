@@ -1,5 +1,5 @@
 # Default lookup path: ~/.config/dfsmount.yaml
-poll_interval: 2
+poll_interval: 5
 
 launchers:
   - name: lutris                    # matched against /proc/<pid>/comm
