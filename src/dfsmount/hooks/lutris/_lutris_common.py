@@ -6,6 +6,7 @@ and imports it directly, since dfsmount runs hooks as standalone processes.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -261,6 +262,7 @@ EXCLUDED_GAME_PATHS = frozenset(
         "shadercache",
         "gstreamer-1.0",
         "drive_c/proton_shortcuts",
+        f"drive_c/users/{os.getlogin()}",
     }
 )
 DOSDEVICES_DIR = "dosdevices"
