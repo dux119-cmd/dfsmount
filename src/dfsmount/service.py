@@ -123,14 +123,9 @@ def run(config_path: Path) -> None:
 
 
 def _resolve_owners(config: ServiceConfig) -> dict[tuple[Path, str], str]:
-    """(archives_dir, target) -> the one running launcher allowed to arm it.
-
-    The same archives_dir (and therefore the same target names) can be
-    shared by more than one launcher config. Only one launcher may hold a
-    given target's writable mount at a time - mounting it twice would give
-    it two independent, diverging overlays. Among the launchers currently
-    running that see this target, the first one in config order trumps;
-    the rest stay dormant for it until they run and the target is free.
+    """
+    Map each (archives_dir, target) to the first running launcher
+    allowed to mount it.
     """
     owners: dict[tuple[Path, str], str] = {}
     for launcher in config.launchers:
